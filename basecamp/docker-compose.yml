@@ -1,0 +1,159 @@
+services:
+  basecamp-mysql:
+    container_name: basecamp-mysql
+    image: ${MYSQL_IMAGE:-mysql:8.0.36}
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: faultlab
+    volumes:
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    networks:
+      - basecamp-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+
+  basecamp-redis:
+    container_name: basecamp-redis
+    image: ${REDIS_IMAGE:-redis:7.2-alpine}
+    command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - basecamp-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  basecamp-kafka:
+    container_name: basecamp-kafka
+    image: ${KAFKA_IMAGE:-apache/kafka:3.7.0}
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://basecamp-kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@basecamp-kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    networks:
+      - basecamp-net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server 127.0.0.1:9092 >/dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+  basecamp-api:
+    container_name: basecamp-api
+    image: ${NODE_IMAGE:-node:20-alpine}
+    working_dir: /app
+    volumes:
+      - ./services/api:/app:ro
+    environment:
+      MYSQL_HOST: basecamp-mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      MYSQL_DB: faultlab
+      REDIS_HOST: basecamp-redis
+      REDIS_PORT: "6379"
+      KAFKA_BROKER: basecamp-kafka:9092
+    command: ["node", "index.js"]
+    networks:
+      - basecamp-net
+    depends_on:
+      basecamp-mysql:
+        condition: service_healthy
+      basecamp-redis:
+        condition: service_healthy
+      basecamp-kafka:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"require('http').get('http://127.0.0.1:3000/health',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.exit(r.statusCode===200&&d.includes('ok')?0:1));}).on('error',()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  basecamp-consumer:
+    container_name: basecamp-consumer
+    image: ${NODE_IMAGE:-node:20-alpine}
+    working_dir: /app
+    volumes:
+      - ./services/consumer:/app:ro
+    environment:
+      KAFKA_BROKER: basecamp-kafka:9092
+    command: ["node", "index.js"]
+    networks:
+      - basecamp-net
+    depends_on:
+      basecamp-kafka:
+        condition: service_healthy
+      basecamp-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -q '[n]ode'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  basecamp-nginx:
+    container_name: basecamp-nginx
+    image: ${NGINX_IMAGE:-nginx:1.25-alpine}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - basecamp-net
+    depends_on:
+      basecamp-api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1/health 2>/dev/null | grep -q ok",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  basecamp-loader:
+    container_name: basecamp-loader
+    image: ${ALPINE_IMAGE:-alpine:3.19}
+    command: ["/bin/sh", "-c", "sleep infinity"]
+    networks:
+      - basecamp-net
+    depends_on:
+      basecamp-nginx:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "true"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  basecamp-net:
+    name: basecamp-net
