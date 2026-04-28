@@ -1,0 +1,12 @@
+{
+  "name": "faultlab-webapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FaultLab web and api scaffold",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

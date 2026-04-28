@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FaultLab Web</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>FaultLab 项目面板</h1>
+      <p>从 project.yaml 读取项目，并展示 scenario_path 下场景数据。</p>
+    </header>
+
+    <main class="layout">
+      <aside class="panel">
+        <h2>项目列表</h2>
+        <div id="project-list">加载中...</div>
+      </aside>
+
+      <section class="panel">
+        <h2>项目详情</h2>
+        <div id="project-detail">请选择一个项目</div>
+
+        <h2>场景列表</h2>
+        <div id="scenario-list">请选择项目后加载</div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
