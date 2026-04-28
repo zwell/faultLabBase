@@ -13,6 +13,7 @@ Usage:
 
 Required environment variable:
   FAULTLAB_SCENARIO=<project>/scenarios/<tech>/<id>
+  (Also supports: scenarios/<tech>/<id> or <tech>/<id>)
 
 Optional environment variable:
   FAULTLAB_PROJECT=basecamp   # default: basecamp

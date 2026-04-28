@@ -214,6 +214,7 @@ scenario       : <scenario-id>
 - 场景切换支持项目变量：
   - `FAULTLAB_PROJECT=<project>`（默认 `basecamp`）
   - `FAULTLAB_SCENARIO=<project>/scenarios/<tech>/<id>`（相对 `faultlab` 根）
+- 编写脚本时，不要写死项目目录名（如 `basecamp`）；路径应基于当前场景目录或由变量推导。
 - `verify` 命令由外层统一实现：读取当前场景的 `SOLUTION.md`，结合用户配置的 API Key 启动 LLM 交互；场景侧无需、也不应提供 `verify.sh`。
 - API Key 通过根目录 `.env` 文件配置（格式见 `.env.example`），`faultlab.sh` 负责读取并传递给 verify 模块，场景侧无需关心。
 
