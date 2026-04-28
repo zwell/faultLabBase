@@ -1,0 +1,56 @@
+version: 1
+
+# Reusable display schema for project cards/pages.
+display_fields:
+  - key: id
+    label: 项目ID
+  - key: name
+    label: 项目名称
+  - key: intro
+    label: 一句话介绍
+  - key: purpose
+    label: 目标用途
+  - key: stack
+    label: 技术栈
+  - key: topology
+    label: 核心组件
+  - key: scenario_path
+    label: 场景目录
+  - key: startup
+    label: 启动命令
+  - key: status
+    label: 当前状态
+  - key: owner
+    label: 负责人
+  - key: tags
+    label: 标签
+
+projects:
+  - id: basecamp
+    name: Basecamp
+    intro: 持续运行的电商模拟底座，用于承载故障演练场景。
+    purpose: 提供真实业务链路与稳定基线，供场景注入和排障训练复用。
+    stack:
+      - docker-compose
+      - nodejs-http
+      - mysql-8.0
+      - redis-7.2
+      - kafka-3.7
+      - nginx
+      - sh-curl-loader
+    topology:
+      - basecamp-mysql
+      - basecamp-redis
+      - basecamp-kafka
+      - basecamp-api
+      - basecamp-consumer
+      - basecamp-nginx
+      - basecamp-loader
+    scenario_path: basecamp/scenarios/
+    startup: docker compose -f basecamp/docker-compose.yml up -d
+    status: active
+    owner: platform-team
+    tags:
+      - baseline
+      - ecommerce
+      - training
