@@ -111,7 +111,7 @@
 ```
 阅读 CLAUDE.md 和 docs/CONTRIBUTING.md 后执行：
 
-创建第一个基于底座的场景 scenarios/mysql/001-connection-pool/，
+创建第一个基于底座的场景 basecamp/scenarios/mysql/001-connection-pool/，
 场景描述：MySQL 连接池打满，支付回调接口超时。
 
 需要创建以下文件：
@@ -148,8 +148,8 @@
 
 完成后运行：
   docker compose -f basecamp/docker-compose.yml up -d
-  sh scenarios/mysql/001-connection-pool/inject.sh
-  sh scenarios/mysql/001-connection-pool/test.sh
+  sh basecamp/scenarios/mysql/001-connection-pool/inject.sh
+  sh basecamp/scenarios/mysql/001-connection-pool/test.sh
 
 报告三个命令的输出结果。
 ```

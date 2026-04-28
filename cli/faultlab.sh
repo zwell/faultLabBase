@@ -3,7 +3,8 @@ set -eu
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 FAULTLAB_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
-SCENARIOS_DIR="$FAULTLAB_ROOT/scenarios"
+FAULTLAB_PROJECT="${FAULTLAB_PROJECT:-basecamp}"
+SCENARIOS_DIR="$FAULTLAB_ROOT/$FAULTLAB_PROJECT/scenarios"
 
 usage() {
   cat <<'EOF'
@@ -11,24 +12,43 @@ Usage:
   ./cli/faultlab.sh <start|inject|verify|clean>
 
 Required environment variable:
-  FAULTLAB_SCENARIO=scenarios/<tech>/<id>
+  FAULTLAB_SCENARIO=<project>/scenarios/<tech>/<id>
+
+Optional environment variable:
+  FAULTLAB_PROJECT=basecamp   # default: basecamp
 
 Examples:
-  FAULTLAB_SCENARIO=scenarios/kafka/001-rebalance-slow-timeout ./cli/faultlab.sh start
-  FAULTLAB_SCENARIO=scenarios/kafka/001-rebalance-slow-timeout ./cli/faultlab.sh inject
+  FAULTLAB_PROJECT=basecamp FAULTLAB_SCENARIO=basecamp/scenarios/kafka/001-rebalance-slow-timeout ./cli/faultlab.sh start
+  FAULTLAB_PROJECT=basecamp FAULTLAB_SCENARIO=basecamp/scenarios/kafka/001-rebalance-slow-timeout ./cli/faultlab.sh inject
+  FAULTLAB_PROJECT=myproj FAULTLAB_SCENARIO=scenarios/kafka/001-rebalance-slow-timeout ./cli/faultlab.sh start
 EOF
 }
 
 resolve_scenario_dir() {
   if [ "${FAULTLAB_SCENARIO:-}" = "" ]; then
     echo "ERROR: FAULTLAB_SCENARIO is not set."
-    echo "Set it like: FAULTLAB_SCENARIO=scenarios/kafka/001-rebalance-slow-timeout"
+    echo "Set it like: FAULTLAB_SCENARIO=$FAULTLAB_PROJECT/scenarios/kafka/001-rebalance-slow-timeout"
     exit 1
   fi
 
   case "$FAULTLAB_SCENARIO" in
-    scenarios/*) SCENARIO_DIR="$FAULTLAB_ROOT/$FAULTLAB_SCENARIO" ;;
-    *) SCENARIO_DIR="$FAULTLAB_ROOT/scenarios/$FAULTLAB_SCENARIO" ;;
+    */scenarios/*)
+      SCENARIO_DIR="$FAULTLAB_ROOT/$FAULTLAB_SCENARIO"
+      ;;
+    scenarios/*)
+      if [ -d "$FAULTLAB_ROOT/$FAULTLAB_PROJECT/$FAULTLAB_SCENARIO" ]; then
+        SCENARIO_DIR="$FAULTLAB_ROOT/$FAULTLAB_PROJECT/$FAULTLAB_SCENARIO"
+      else
+        SCENARIO_DIR="$FAULTLAB_ROOT/$FAULTLAB_SCENARIO"
+      fi
+      ;;
+    *)
+      if [ -d "$FAULTLAB_ROOT/$FAULTLAB_PROJECT/scenarios/$FAULTLAB_SCENARIO" ]; then
+        SCENARIO_DIR="$FAULTLAB_ROOT/$FAULTLAB_PROJECT/scenarios/$FAULTLAB_SCENARIO"
+      else
+        SCENARIO_DIR="$FAULTLAB_ROOT/scenarios/$FAULTLAB_SCENARIO"
+      fi
+      ;;
   esac
 
   if [ ! -d "$SCENARIO_DIR" ]; then

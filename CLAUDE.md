@@ -3,7 +3,7 @@
 本文件是 Claude Code 的开发规范，**每次开始任务前必须完整读取**。
 所有代码生成、文件创建、脚本编写均以本文为准。
 
-> 平台支持：macOS / Linux。Windows 暂不支持。
+> 平台支持：macOS / Linux / Windows（建议 Git Bash）。
 
 ---
 
@@ -290,7 +290,7 @@ business_context: payment     # 业务链路：order / payment / search / invent
 
 ### 创建新场景的标准流程
 
-1. 创建目录 `scenarios/<tech>/<NNN>-<desc>/`
+1. 创建目录 `basecamp/scenarios/<tech>/<NNN>-<desc>/`
 2. `meta.yaml`（含 requires_basecamp、business_context）
 3. `inject.sh`（含底座检查 + 标准摘要）
 4. `scenario.md`（业务剧本，不含技术根因）
