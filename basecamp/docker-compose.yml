@@ -99,10 +99,10 @@ services:
     image: ${NODE_IMAGE:-node:20-alpine}
     working_dir: /app
     volumes:
-      - ./services/consumer:/app:ro
+      - ./services/consumer:/app
     environment:
       KAFKA_BROKER: basecamp-kafka:9092
-    command: ["node", "index.js"]
+    command: ["/bin/sh", "-c", "npm install --no-audit --no-fund >/dev/null && node index.js"]
     networks:
       - basecamp-net
     depends_on:

@@ -1,0 +1,9 @@
+{
+  "name": "basecamp-consumer",
+  "private": true,
+  "version": "0.0.1",
+  "main": "index.js",
+  "dependencies": {
+    "kafkajs": "2.2.4"
+  }
+}
