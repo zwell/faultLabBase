@@ -205,33 +205,30 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
                 <div class="info-label">技术栈</div>
                 <div class="info-value stack-links">${renderStackLinks(basecamp?.stack || [])}</div>
               </div>
-              <div class="info-item">
-                <div class="info-label">核心组件</div>
-                <div class="info-value">${escapeHtml((basecamp?.topology || []).join(" / ") || "-")}</div>
-              </div>
             </div>
           </div>
 
-          <div class="basecamp-actions">
-            <h2 class="section-title">操作</h2>
-            <button class="primary-btn" id="start-btn" ${isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
-              busyAction === "start" ? "启动中…" : "启动系统"
-            )}</button>
-            <button class="ghost-btn" id="restart-btn" ${!isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
-              busyAction === "restart" ? "重启中…" : "重启系统"
-            )}</button>
-            <button class="ghost-btn danger" id="stop-btn" ${!isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
-              busyAction === "stop" ? "停止中…" : "停止系统"
-            )}</button>
-            <button class="ghost-btn danger" id="clean-btn" ${busyAction ? "disabled" : ""}>${escapeHtml(
-              busyAction === "clean" ? "清理中…" : "清理数据"
-            )}</button>
-            <p class="muted action-hint" id="action-hint">启动/重启可能需要几十秒，请等待状态刷新。</p>
-          </div>
         </div>
       </section>
 
       <section class="panel ops-panel">
+        <div class="ops-actions">
+          <div class="op-buttons">
+            <button class="primary-btn small" id="start-btn" ${isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
+              busyAction === "start" ? "启动中…" : "启动"
+            )}</button>
+            <button class="ghost-btn small" id="restart-btn" ${!isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
+              busyAction === "restart" ? "重启中…" : "重启"
+            )}</button>
+            <button class="ghost-btn danger small" id="stop-btn" ${!isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
+              busyAction === "stop" ? "停止中…" : "停止"
+            )}</button>
+            <button class="ghost-btn danger small" id="clean-btn" ${busyAction ? "disabled" : ""}>${escapeHtml(
+              busyAction === "clean" ? "清理中…" : "清理"
+            )}</button>
+          </div>
+        </div>
+
         <div class="terminal-toolbar">
           <div class="terminal-toolbar-left">
             <span class="filter-label">容器</span>
@@ -248,6 +245,7 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
 
         <div class="terminal-status muted" id="terminal-status">未连接</div>
         <div id="terminal" class="terminal-box"></div>
+        <p class="muted action-hint" id="action-hint"></p>
       </section>
 
       <section class="panel scenarios-panel">

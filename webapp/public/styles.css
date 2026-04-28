@@ -126,7 +126,10 @@ h2 {
 }
 
 .primary-btn:disabled {
-  opacity: 0.65;
+  opacity: 0.55;
+  border-color: #30363d;
+  background: rgba(110, 118, 129, 0.12);
+  color: rgba(201, 209, 217, 0.75);
   cursor: not-allowed;
 }
 
@@ -248,11 +251,36 @@ input.cmd-input {
   margin-bottom: 10px;
 }
 
+.ops-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
 .terminal-toolbar-right {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.op-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.primary-btn.small,
+.ghost-btn.small {
+  width: auto;
+  padding: 7px 10px;
+  font-size: 12px;
+  border-radius: 10px;
 }
 
 .terminal-hint {
@@ -345,7 +373,7 @@ input.cmd-input {
 
 .basecamp-info-row {
   display: grid;
-  grid-template-columns: 1fr 260px;
+  grid-template-columns: 1fr;
   gap: 16px;
 }
 

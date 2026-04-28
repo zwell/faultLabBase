@@ -215,25 +215,39 @@ async function runBasecampAction(project, action) {
   }
 
   const composeCmd = (args) => `docker compose -f ${composeFile} ${args}`;
+  const stream = (cmd) =>
+    spawnShellStreaming(cmd, {
+      cwd: REPO_ROOT,
+      timeoutMs: 5 * 60 * 1000,
+      onChunk: (chunk) => broadcastToHostTerminals(project.id, chunk)
+    });
 
   if (action === "start") {
-    await execCommand(startup, { cwd: REPO_ROOT, timeout: 5 * 60 * 1000 });
+    broadcastToHostTerminals(project.id, `\r\n$ ${startup}\r\n`);
+    await stream(startup);
     return;
   }
 
   if (action === "stop") {
-    await execCommand(composeCmd("down"), { cwd: REPO_ROOT, timeout: 5 * 60 * 1000 });
+    const cmd = composeCmd("down");
+    broadcastToHostTerminals(project.id, `\r\n$ ${cmd}\r\n`);
+    await stream(cmd);
     return;
   }
 
   if (action === "clean") {
-    await execCommand(composeCmd("down -v"), { cwd: REPO_ROOT, timeout: 5 * 60 * 1000 });
+    const cmd = composeCmd("down -v");
+    broadcastToHostTerminals(project.id, `\r\n$ ${cmd}\r\n`);
+    await stream(cmd);
     return;
   }
 
   if (action === "restart") {
-    await execCommand(composeCmd("down"), { cwd: REPO_ROOT, timeout: 5 * 60 * 1000 });
-    await execCommand(startup, { cwd: REPO_ROOT, timeout: 5 * 60 * 1000 });
+    const downCmd = composeCmd("down");
+    broadcastToHostTerminals(project.id, `\r\n$ ${downCmd}\r\n`);
+    await stream(downCmd);
+    broadcastToHostTerminals(project.id, `\r\n$ ${startup}\r\n`);
+    await stream(startup);
     return;
   }
 
@@ -278,6 +292,93 @@ function assertSafeContainerName(name) {
 
 function assertSafeCommand(cmd) {
   return typeof cmd === "string" && cmd.trim().length > 0 && cmd.length <= 2000;
+}
+
+function makeRingBuffer(maxLines) {
+  const lines = [];
+  return {
+    push(line) {
+      lines.push(line);
+      while (lines.length > maxLines) lines.shift();
+    },
+    snapshot() {
+      return lines.slice();
+    }
+  };
+}
+
+const hostTerminalSubscribers = new Map(); // basecampId -> Set<WebSocket>
+const basecampOpLog = new Map(); // basecampId -> ring buffer
+
+function getBasecampOpBuffer(basecampId) {
+  const key = basecampId || "__global__";
+  if (!basecampOpLog.has(key)) basecampOpLog.set(key, makeRingBuffer(200));
+  return basecampOpLog.get(key);
+}
+
+function broadcastToHostTerminals(basecampId, text) {
+  const key = basecampId || "__global__";
+  const buf = getBasecampOpBuffer(key);
+  const normalized = String(text || "").replace(/\r?\n/g, "\r\n");
+  for (const line of normalized.split("\r\n")) {
+    if (line.trim()) buf.push(line);
+  }
+
+  const subs = hostTerminalSubscribers.get(key);
+  if (!subs) return;
+  for (const ws of subs) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(normalized);
+  }
+}
+
+function spawnShellStreaming(cmd, { cwd, timeoutMs, onChunk }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("sh", ["-lc", cmd], {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    let timedOut = false;
+    const timer =
+      timeoutMs && timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            try {
+              child.kill("SIGKILL");
+            } catch {}
+          }, timeoutMs)
+        : null;
+
+    const handle = (data) => {
+      if (!data) return;
+      onChunk(data.toString("utf8"));
+    };
+    child.stdout.on("data", handle);
+    child.stderr.on("data", handle);
+
+    child.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
+
+    child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (timedOut) {
+        const err = new Error("command_timeout");
+        err.code = "command_timeout";
+        reject(err);
+        return;
+      }
+      if (code === 0) resolve();
+      else {
+        const err = new Error("command_failed");
+        err.code = "command_failed";
+        err.exitCode = code;
+        reject(err);
+      }
+    });
+  });
 }
 
 function assertSafeSize(n, fallback) {
@@ -587,6 +688,16 @@ wss.on("connection", (ws, sessionInfo) => {
   const { target, basecampId, container } = sessionInfo;
   const term = target === "host" ? makeTerminalSessionHost() : makeTerminalSessionContainer(basecampId, container);
 
+  if (target === "host") {
+    const key = basecampId || "__global__";
+    if (!hostTerminalSubscribers.has(key)) hostTerminalSubscribers.set(key, new Set());
+    hostTerminalSubscribers.get(key).add(ws);
+    const snapshot = getBasecampOpBuffer(key).snapshot();
+    if (snapshot.length) {
+      ws.send(snapshot.join("\r\n") + "\r\n");
+    }
+  }
+
   function sanitizeTerminalOutput(text) {
     if (!text) return "";
     // When not running under a real TTY, some shells print job-control warnings on stderr.
@@ -636,6 +747,11 @@ wss.on("connection", (ws, sessionInfo) => {
       term.kill("SIGKILL");
     } catch {
       // ignore
+    }
+    if (target === "host") {
+      const key = basecampId || "__global__";
+      const set = hostTerminalSubscribers.get(key);
+      if (set) set.delete(ws);
     }
   };
 
