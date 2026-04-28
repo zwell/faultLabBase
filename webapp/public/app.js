@@ -1,5 +1,5 @@
-let selectedProjectId = null;
-let cachedProjects = [];
+let cachedBasecamps = [];
+let startInProgress = new Set();
 
 function escapeHtml(text) {
   return String(text)
@@ -16,99 +16,89 @@ async function fetchJson(url) {
   return response.json();
 }
 
-function renderProjects() {
-  const projectListEl = document.getElementById("project-list");
-  if (!cachedProjects.length) {
-    projectListEl.innerHTML = '<p class="muted">没有项目</p>';
+function getStatusText(status) {
+  if (status === "running") return "运行中";
+  if (status === "stopped") return "未启动";
+  return "未知";
+}
+
+function getResourceLevelText(level) {
+  if (level === "heavy") return "重量级";
+  if (level === "medium") return "中等";
+  if (level === "light") return "轻量";
+  return "未知";
+}
+
+function renderBasecamps() {
+  const listEl = document.getElementById("basecamp-list");
+  if (!cachedBasecamps.length) {
+    listEl.innerHTML = '<p class="muted">暂无底座，请先在 project.yaml 中配置 projects</p>';
     return;
   }
 
-  projectListEl.innerHTML = cachedProjects
-    .map((project) => {
-      const activeClass = project.id === selectedProjectId ? "active" : "";
+  listEl.innerHTML = cachedBasecamps
+    .map((basecamp) => {
+      const statusText = getStatusText(basecamp.status);
+      const resourceLevelText = getResourceLevelText(basecamp.resource_level);
+      const countText = `${Number(basecamp.scenario_count || 0)} 个场景 · ${resourceLevelText}`;
+      const starting = startInProgress.has(basecamp.id);
+      const buttonText =
+        basecamp.status === "running" ? "开始演练" : starting ? "启动中…" : "开始演练";
       return `
-        <div class="project-item ${activeClass}" data-project-id="${escapeHtml(project.id)}">
-          <strong>${escapeHtml(project.name || project.id)}</strong>
-          <div class="muted">${escapeHtml(project.intro || "")}</div>
-        </div>
+        <article class="basecamp-card" data-basecamp-id="${escapeHtml(basecamp.id)}">
+          <div class="basecamp-header">
+            <strong class="basecamp-title">${escapeHtml(basecamp.name || "")}</strong>
+            <span class="status-text">${escapeHtml(statusText)}</span>
+          </div>
+          <p class="basecamp-intro">${escapeHtml(basecamp.intro || "暂无描述")}</p>
+          <p class="basecamp-meta">${escapeHtml(countText)}</p>
+          <button class="primary-btn" ${starting ? "disabled" : ""}>${escapeHtml(buttonText)}</button>
+        </article>
       `;
     })
     .join("");
 
-  for (const item of projectListEl.querySelectorAll(".project-item")) {
-    item.addEventListener("click", () => {
-      selectedProjectId = item.dataset.projectId;
-      renderProjects();
-      renderProjectDetail();
-      loadScenarios();
+  for (const card of listEl.querySelectorAll(".basecamp-card")) {
+    const basecampId = card.dataset.basecampId;
+    const btn = card.querySelector("button.primary-btn");
+    if (!btn) continue;
+
+    btn.addEventListener("click", async () => {
+      const basecamp = cachedBasecamps.find((item) => item.id === basecampId);
+      if (!basecamp) return;
+
+      if (basecamp.status === "running") {
+        window.location.hash = `#/basecamps/${encodeURIComponent(basecampId)}`;
+        return;
+      }
+
+      startInProgress.add(basecampId);
+      renderBasecamps();
+      try {
+        await fetch(`/api/basecamps/${encodeURIComponent(basecampId)}/start`, { method: "POST" });
+      } catch {
+        // ignore; polling will reflect final status
+      } finally {
+        startInProgress.delete(basecampId);
+      }
     });
   }
 }
 
-function renderProjectDetail() {
-  const detailEl = document.getElementById("project-detail");
-  const project = cachedProjects.find((item) => item.id === selectedProjectId);
-  if (!project) {
-    detailEl.innerHTML = '<p class="muted">请选择一个项目</p>';
-    return;
-  }
-
-  const stack = Array.isArray(project.stack) ? project.stack.join(", ") : "";
-  detailEl.innerHTML = `
-    <p><strong>ID:</strong> ${escapeHtml(project.id)}</p>
-    <p><strong>名称:</strong> ${escapeHtml(project.name || "")}</p>
-    <p><strong>介绍:</strong> ${escapeHtml(project.intro || "")}</p>
-    <p><strong>场景目录:</strong> <code>${escapeHtml(project.scenario_path || "")}</code></p>
-    <p><strong>技术栈:</strong> ${escapeHtml(stack)}</p>
-  `;
-}
-
-async function loadScenarios() {
-  const scenarioListEl = document.getElementById("scenario-list");
-  if (!selectedProjectId) {
-    scenarioListEl.innerHTML = '<p class="muted">请选择项目后加载</p>';
-    return;
-  }
-
-  scenarioListEl.innerHTML = '<p class="muted">加载中...</p>';
-  try {
-    const data = await fetchJson(`/api/projects/${encodeURIComponent(selectedProjectId)}/scenarios`);
-    const scenarios = Array.isArray(data.scenarios) ? data.scenarios : [];
-    if (!scenarios.length) {
-      scenarioListEl.innerHTML = '<p class="muted">该项目下没有找到场景</p>';
-      return;
-    }
-
-    scenarioListEl.innerHTML = scenarios
-      .map((scenario) => {
-        const meta = scenario.meta || {};
-        return `
-          <div class="scenario-item">
-            <p><strong>${escapeHtml(meta.title || meta.id || "未命名场景")}</strong></p>
-            <p class="muted">目录: <code>${escapeHtml(scenario.dir || "")}</code></p>
-            <p>技术: ${escapeHtml(meta.tech || "-")} | 难度: ${escapeHtml(meta.difficulty || "-")}</p>
-          </div>
-        `;
-      })
-      .join("");
-  } catch (error) {
-    scenarioListEl.innerHTML = `<p class="muted">加载失败: ${escapeHtml(error.message)}</p>`;
-  }
-}
-
 async function boot() {
-  try {
-    const data = await fetchJson("/api/projects");
-    cachedProjects = Array.isArray(data.projects) ? data.projects : [];
-    selectedProjectId = cachedProjects[0]?.id || null;
-    renderProjects();
-    renderProjectDetail();
-    await loadScenarios();
-  } catch (error) {
-    document.getElementById("project-list").innerHTML = `<p class="muted">加载失败: ${escapeHtml(
-      error.message
-    )}</p>`;
+  const listEl = document.getElementById("basecamp-list");
+  async function refresh() {
+    try {
+      const data = await fetchJson("/api/basecamps");
+      cachedBasecamps = Array.isArray(data.basecamps) ? data.basecamps : [];
+      renderBasecamps();
+    } catch {
+      listEl.innerHTML = '<p class="muted">加载失败：请检查服务是否启动</p>';
+    }
   }
+
+  await refresh();
+  setInterval(refresh, 2000);
 }
 
 boot();

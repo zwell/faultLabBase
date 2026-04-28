@@ -1,27 +1,27 @@
-# Basecamp Project Spec
+# Basecamp 项目规范
 
-## Project Name
+## 项目名称
 
-- **Name**: `basecamp`
-- **Type**: FaultLab project module
-- **Purpose**: Provide a continuously running, business-like baseline environment for scenario generation and troubleshooting drills.
+- **名称**：`basecamp`
+- **类型**：FaultLab 项目模块
+- **用途**：提供持续运行、贴近真实业务的基线环境，用于场景生成与排障训练。
 
-## Project Introduction
+## 项目简介
 
-`basecamp` is the default project module in FaultLab. It simulates a compact e-commerce workload and serves as the runtime substrate for scenario directories under `basecamp/scenarios/`.
+`basecamp` 是 FaultLab 的默认项目模块。它模拟了一个紧凑的电商业务负载，并作为 `basecamp/scenarios/` 下各类场景目录的运行底座。
 
-This README is specification-oriented and intended for contributors, automation tools, and AI agents that generate or maintain scenarios in batch.
+本文档偏规范说明，面向贡献者、自动化工具和批量生成/维护场景的 AI Agent。
 
-## Technology Stack
+## 技术栈
 
-- **Runtime**: Docker Compose
-- **API**: Node.js (`http` native module)
-- **Data**: MySQL 8.0, Redis 7.2
-- **Messaging**: Kafka 3.7
-- **Traffic Entry**: Nginx
-- **Traffic Generator**: Alpine + sh + curl
+- **运行时**：Docker Compose
+- **API**：Node.js（原生 `http` 模块）
+- **数据层**：MySQL 8.0、Redis 7.2
+- **消息系统**：Kafka 3.7
+- **流量入口**：Nginx
+- **流量生成**：Alpine + sh + curl
 
-## Core Topology
+## 核心拓扑
 
 - `basecamp-mysql`
 - `basecamp-redis`
@@ -31,43 +31,43 @@ This README is specification-oriented and intended for contributors, automation 
 - `basecamp-nginx`
 - `basecamp-loader`
 
-All services communicate in `basecamp-net` and are brought up via `basecamp/docker-compose.yml`.
+所有服务运行在 `basecamp-net` 网络中，通过 `basecamp/docker-compose.yml` 统一启动。
 
-## Directory Contract
+## 目录约定
 
-- `docker-compose.yml`: baseline infrastructure definition for this project
-- `mysql/init.sql`: schema + seed data
-- `nginx/nginx.conf`: ingress reverse proxy
-- `services/`: runtime service implementations (`api`, `consumer`, `loader`)
-- `scenarios/`: scenario set for this project (batch-generated and manually curated)
+- `docker-compose.yml`：本项目基线基础设施定义
+- `mysql/init.sql`：数据库表结构与种子数据
+- `nginx/nginx.conf`：入口反向代理配置
+- `services/`：运行服务实现（`api`、`consumer`、`loader`）
+- `scenarios/`：本项目场景集合（可批量生成，也可人工维护）
 
-## Scenario Extension Policy
+## 场景扩展策略
 
-New scenarios for this project must be placed under:
+本项目新增场景必须放在：
 
 - `basecamp/scenarios/<tech>/<id>/`
 
-Recommended file set (depends on scenario type):
+推荐文件集合（按场景类型选用）：
 
 - `meta.yaml`
 - `inject.sh`
 - `README.md`
 - `SOLUTION.md`
 - `test.sh`
-- `docker-compose.yml` (only when scenario is not `requires_basecamp: true`)
+- `docker-compose.yml`（仅当场景不是 `requires_basecamp: true` 时需要）
 
-## Execution Baseline
+## 基线运行方式
 
-From repository root:
+在仓库根目录执行：
 
 ```sh
 docker compose -f basecamp/docker-compose.yml up -d
 docker compose -f basecamp/docker-compose.yml ps
 ```
 
-## CLI Integration
+## CLI 集成
 
-Use project-aware variables when running scenarios:
+运行场景时建议使用项目感知变量：
 
 ```sh
 export FAULTLAB_PROJECT=basecamp
@@ -75,10 +75,10 @@ export FAULTLAB_SCENARIO=basecamp/scenarios/<tech>/<id>
 ./cli/faultlab.sh start
 ```
 
-`FAULTLAB_SCENARIO` also supports `scenarios/<tech>/<id>` and `<tech>/<id>` forms.
+`FAULTLAB_SCENARIO` 也支持 `scenarios/<tech>/<id>` 与 `<tech>/<id>` 两种写法。
 
-## Maintenance Notes
+## 维护说明
 
-- Keep image versions pinned and override-able via env vars.
-- Avoid host-only dependencies in scripts.
-- Keep this document aligned with `docs/CONTRIBUTING.md` and CLI behavior.
+- 镜像版本保持固定，并允许通过环境变量覆盖。
+- 脚本避免依赖宿主机额外工具。
+- 本文档需与 `docs/CONTRIBUTING.md` 和 CLI 行为保持一致。

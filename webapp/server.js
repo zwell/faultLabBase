@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs/promises");
 const path = require("path");
+const { exec } = require("child_process");
 const yaml = require("js-yaml");
 
 const HOST = process.env.HOST || "0.0.0.0";
@@ -106,6 +107,84 @@ async function loadProjectScenarios(project) {
   return scenarios;
 }
 
+function execCommand(command, options) {
+  return new Promise((resolve, reject) => {
+    exec(
+      command,
+      { ...options, encoding: "utf8", maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(Object.assign(error, { stdout, stderr }));
+          return;
+        }
+        resolve({ stdout, stderr });
+      }
+    );
+  });
+}
+
+async function getDockerRunningNames() {
+  try {
+    const { stdout } = await execCommand("docker ps --format '{{.Names}}'", { cwd: REPO_ROOT });
+    return stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+function rankResourceLevel(level) {
+  const order = { light: 1, medium: 2, heavy: 3 };
+  return order[level] || 0;
+}
+
+async function loadBasecampSummary(project) {
+  const scenarios = await loadProjectScenarios(project);
+  let resourceLevel = "unknown";
+  for (const item of scenarios) {
+    const level = item?.meta?.resource_level;
+    if (typeof level === "string" && rankResourceLevel(level) > rankResourceLevel(resourceLevel)) {
+      resourceLevel = level;
+    }
+  }
+
+  return {
+    scenario_count: scenarios.length,
+    resource_level: resourceLevel
+  };
+}
+
+async function loadBasecamps() {
+  const projects = await loadProjects();
+  const runningNames = await getDockerRunningNames();
+
+  const basecamps = [];
+  for (const project of projects) {
+    const summary = await loadBasecampSummary(project);
+
+    let status = "stopped";
+    if (runningNames === null) {
+      status = "unknown";
+    } else if (Array.isArray(project.topology) && project.topology.some((name) => runningNames.includes(name))) {
+      status = "running";
+    }
+
+    basecamps.push({
+      id: project.id,
+      name: project.name || project.id,
+      intro: project.intro || "",
+      status,
+      scenario_count: summary.scenario_count,
+      resource_level: summary.resource_level,
+      startup: project.startup || ""
+    });
+  }
+
+  return basecamps;
+}
+
 function getContentType(filePath) {
   if (filePath.endsWith(".css")) return "text/css; charset=utf-8";
   if (filePath.endsWith(".js")) return "application/javascript; charset=utf-8";
@@ -144,6 +223,31 @@ async function requestHandler(req, res) {
     if (req.method === "GET" && pathname === "/api/projects") {
       const projects = await loadProjects();
       sendJson(res, 200, { projects });
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/basecamps") {
+      const basecamps = await loadBasecamps();
+      sendJson(res, 200, { basecamps });
+      return;
+    }
+
+    const startMatch = pathname.match(/^\/api\/basecamps\/([^/]+)\/start$/);
+    if (req.method === "POST" && startMatch) {
+      const basecampId = decodeURIComponent(startMatch[1]);
+      const projects = await loadProjects();
+      const project = projects.find((item) => item.id === basecampId);
+      if (!project || typeof project.startup !== "string" || project.startup.trim() === "") {
+        sendJson(res, 404, { error: "basecamp not found" });
+        return;
+      }
+
+      try {
+        await execCommand(project.startup, { cwd: REPO_ROOT, timeout: 5 * 60 * 1000 });
+        sendJson(res, 200, { ok: true });
+      } catch {
+        sendJson(res, 500, { error: "basecamp start failed" });
+      }
       return;
     }
 
