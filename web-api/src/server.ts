@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import path from "node:path";
+import fs from "node:fs";
 import { listProjects, readProjectReadme } from "./services/projectService";
 import { listScenarios, readScenario } from "./services/scenarioService";
 import {
@@ -16,7 +17,34 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 const PORT = Number(process.env.WEB_API_PORT || 8787);
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+
+function resolveRepoRoot(): string {
+  if (process.env.REPO_ROOT) {
+    return path.resolve(process.env.REPO_ROOT);
+  }
+
+  const anchors = ["cli/faultlab.sh", "docs/CONTRIBUTING.md"];
+  const starts = [process.cwd(), __dirname];
+
+  for (const start of starts) {
+    let current = path.resolve(start);
+    while (true) {
+      const matched = anchors.every((rel) => fs.existsSync(path.join(current, rel)));
+      if (matched) {
+        return current;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  }
+
+  return path.resolve(process.cwd(), "..");
+}
+
+const REPO_ROOT = resolveRepoRoot();
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", repoRoot: REPO_ROOT });
