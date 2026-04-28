@@ -27,7 +27,7 @@ display_fields:
 
 projects:
   - id: basecamp
-    name: Basecamp
+    name: 商城系统
     intro: 持续运行的电商模拟底座，用于承载故障演练场景。
     purpose: 提供真实业务链路与稳定基线，供场景注入和排障训练复用。
     stack:

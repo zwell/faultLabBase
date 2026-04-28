@@ -5,20 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FaultLab Web</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
   </head>
   <body>
     <main class="layout">
-      <section class="hero panel">
-        <h1>开始一次故障演练</h1>
-        <p class="hero-subtitle">先选择一个业务底座环境。</p>
-      </section>
-
-      <section class="panel">
-        <h2>选择底座</h2>
-        <div id="basecamp-list">加载中...</div>
-      </section>
+      <div id="app">加载中...</div>
     </main>
 
+    <script src="https://unpkg.com/xterm/lib/xterm.js"></script>
+    <script src="/terminal.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>
