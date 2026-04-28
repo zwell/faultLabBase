@@ -1,0 +1,12 @@
+id: mysql-001
+title: 连接池打满，支付回调超时
+tech: mysql
+difficulty: 3
+duration_min: 25
+duration_max: 40
+resource_level: heavy
+tags:
+  - connection-pool
+parameter_intervention: true
+requires_basecamp: true
+business_context: payment
