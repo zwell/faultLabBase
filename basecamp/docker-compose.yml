@@ -141,14 +141,16 @@ services:
   basecamp-loader:
     container_name: basecamp-loader
     image: ${ALPINE_IMAGE:-alpine:3.19}
-    command: ["/bin/sh", "-c", "sleep infinity"]
+    volumes:
+      - ./services/loader:/loader:ro
+    command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && /bin/sh /loader/run.sh"]
     networks:
       - basecamp-net
     depends_on:
       basecamp-nginx:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "true"]
+      test: ["CMD-SHELL", "ps aux | grep -q '[r]un.sh'"]
       interval: 30s
       timeout: 5s
       retries: 3
