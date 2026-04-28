@@ -2,10 +2,12 @@
 node_modules/
 web/node_modules/
 web-api/node_modules/
+webapp/node_modules/
 
 # Build outputs
 web/dist/
 web-api/dist/
+webapp/dist/
 
 # Local env/runtime files
 .env
