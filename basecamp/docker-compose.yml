@@ -63,7 +63,7 @@ services:
     image: ${NODE_IMAGE:-node:20-alpine}
     working_dir: /app
     volumes:
-      - ./services/api:/app:ro
+      - ./services/api:/app
     environment:
       MYSQL_HOST: basecamp-mysql
       MYSQL_PORT: "3306"
@@ -73,7 +73,7 @@ services:
       REDIS_HOST: basecamp-redis
       REDIS_PORT: "6379"
       KAFKA_BROKER: basecamp-kafka:9092
-    command: ["node", "index.js"]
+    command: ["/bin/sh", "-c", "npm install --no-audit --no-fund >/dev/null && node index.js"]
     networks:
       - basecamp-net
     depends_on:
