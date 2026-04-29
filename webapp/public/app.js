@@ -176,7 +176,7 @@ function renderBasecamps() {
 }
 
 function renderScenarioListPage(basecampId, scenarios, filters) {
-  const basecamp = cachedBasecamps.find((item) => item.id === basecampId) || cachedBasecampDetails.get(basecampId);
+  const basecamp = cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((item) => item.id === basecampId);
   const basecampName = basecamp?.name || basecampId;
   const statusText = getStatusText(basecamp?.status);
   const resourceLevelText = getResourceLevelText(basecamp?.resource_level);
@@ -285,7 +285,7 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
   async function runAction(action) {
     if (basecampActionBusy.get(basecampId)) return;
     const latestBasecamp =
-      cachedBasecamps.find((item) => item.id === basecampId) || cachedBasecampDetails.get(basecampId);
+      cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((item) => item.id === basecampId);
     const running = latestBasecamp?.status === "running";
     if (action === "start" && running) return;
     if ((action === "stop" || action === "restart") && !running) return;
@@ -494,7 +494,13 @@ async function loadBasecampDetail(basecampId) {
   if (cachedBasecampDetails.has(basecampId)) return cachedBasecampDetails.get(basecampId);
   const data = await fetchJson(`/api/basecamps/${encodeURIComponent(basecampId)}`);
   const basecamp = data.basecamp || null;
-  if (basecamp) cachedBasecampDetails.set(basecampId, basecamp);
+  if (basecamp) {
+    cachedBasecampDetails.set(basecampId, basecamp);
+    const idx = cachedBasecamps.findIndex((item) => item.id === basecampId);
+    if (idx >= 0) {
+      cachedBasecamps[idx] = { ...cachedBasecamps[idx], ...basecamp };
+    }
+  }
   return basecamp;
 }
 
