@@ -359,6 +359,19 @@ input.cmd-input {
   margin-bottom: 10px;
 }
 
+.business-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mock-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
 .business-cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

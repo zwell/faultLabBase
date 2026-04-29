@@ -364,6 +364,7 @@ function renderScenarioDetailPage(basecampId, scenario) {
   const guide = String(scenario?.troubleshooting_guide || "");
   const messages = [];
   const scenarioStateKey = `${basecampId}::${scenario?.scenario_id || ""}`;
+  const showInjectUi = window.FaultLabUiConfig?.showScenarioInjectUi !== false;
 
   function extractFirstParagraph(markdown) {
     const cleaned = String(markdown || "")
@@ -422,7 +423,11 @@ function renderScenarioDetailPage(basecampId, scenario) {
           <h2>${escapeHtml(title)}</h2>
           <div class="scenario-head-actions">
             <span id="scenario-inject-tag" class="scenario-tag">未注入</span>
-            <button id="scenario-inject-btn" class="ghost-btn small">注入故障</button>
+            ${
+              showInjectUi
+                ? '<button id="scenario-inject-btn" class="ghost-btn small">注入故障</button>'
+                : ""
+            }
           </div>
         </div>
         <div class="scenario-detail-content">
@@ -474,6 +479,8 @@ function renderScenarioDetailPage(basecampId, scenario) {
     shellMode: "scenario",
     businessContainerEl: statusSlot,
     shellTerminalContainerEl: shellSlot,
+    enableScenarioInjection: showInjectUi,
+    autoInjectOnPage: !!window.FaultLabUiConfig?.autoInjectOnPage,
     fetchJson,
     postAction: async (url) => {
       await postAction(url);
@@ -518,22 +525,22 @@ function renderScenarioDetailPage(basecampId, scenario) {
     if (state === "injected") {
       injectTagEl.textContent = "已注入";
       injectTagEl.className = "scenario-tag injected";
-      injectBtnEl.style.display = "none";
-      return;
-    }
-    if (state === "failed") {
+    } else if (state === "failed") {
       injectTagEl.textContent = "注入失败";
       injectTagEl.className = "scenario-tag failed";
     } else {
       injectTagEl.textContent = "未注入";
       injectTagEl.className = "scenario-tag";
     }
-    injectBtnEl.style.display = "inline-flex";
-    injectBtnEl.disabled = !!busy || !isRunningForBasecamp();
-    injectBtnEl.textContent = busy === "inject" ? "注入中…" : "注入故障";
+    if (injectBtnEl) {
+      injectBtnEl.style.display = "inline-flex";
+      injectBtnEl.disabled = !!busy || !isRunningForBasecamp();
+      const label = state === "failed" || state === "injected" ? "重新注入" : "注入故障";
+      injectBtnEl.textContent = busy === "inject" ? "注入中…" : label;
+    }
   }
 
-  injectBtnEl.addEventListener("click", async () => {
+  if (injectBtnEl) injectBtnEl.addEventListener("click", async () => {
     const snapshot = store.getState();
     store.setState({
       opsBusyById: {
@@ -717,6 +724,13 @@ async function renderRoute() {
 }
 
 async function boot() {
+  // UI-level feature flags (server controlled via env).
+  try {
+    window.FaultLabUiConfig = await fetchJson("/api/ui-config");
+  } catch {
+    window.FaultLabUiConfig = { showScenarioInjectUi: true, enableScenarioInjection: true };
+  }
+
   async function refreshBasecamps() {
     try {
       const data = await fetchJson("/api/basecamps");

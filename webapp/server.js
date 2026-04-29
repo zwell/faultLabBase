@@ -151,9 +151,10 @@ async function runScenarioAction(project, scenario, action) {
 
 function execCommand(command, options) {
   return new Promise((resolve, reject) => {
+    const maxBuffer = options?.maxBuffer ? options.maxBuffer : 1024 * 1024;
     exec(
       command,
-      { ...options, encoding: "utf8", maxBuffer: 1024 * 1024 },
+      { ...options, encoding: "utf8", maxBuffer },
       (error, stdout, stderr) => {
         if (error) {
           reject(Object.assign(error, { stdout, stderr }));
@@ -294,7 +295,8 @@ async function collectRuntimeOrderMetrics() {
   try {
     const { stdout } = await execCommand("docker logs --since 2m basecamp-api 2>&1", {
       cwd: REPO_ROOT,
-      timeout: 5 * 1000
+      timeout: 5 * 1000,
+      maxBuffer: 20 * 1024 * 1024
     });
     const now = Date.now();
     const lines = String(stdout)
@@ -318,9 +320,10 @@ async function collectRuntimeOrderMetrics() {
       });
     }
 
-    const chainEntries = lastMinuteEntries.filter((item) => item.path.startsWith("/orders"));
-    const total = chainEntries.length;
-    if (total === 0) {
+    const orderEntries = lastMinuteEntries.filter((item) => item.path === "/orders");
+    const productEntries = lastMinuteEntries.filter((item) => item.path.startsWith("/products"));
+    const total = orderEntries.length;
+    if (total === 0 && productEntries.length === 0) {
       return {
         requests_per_min: 0,
         p99_ms: 0,
@@ -329,23 +332,33 @@ async function collectRuntimeOrderMetrics() {
         p50_ms: 0,
         status_2xx: 0,
         status_4xx: 0,
-        status_5xx: 0
+        status_5xx: 0,
+        write_success_rate: 1,
+        read_success_rate: 1
       };
     }
-    const latencies = chainEntries.map((item) => item.tookMs).filter((n) => Number.isFinite(n));
-    const s2 = chainEntries.filter((item) => item.status >= 200 && item.status < 300).length;
-    const s4 = chainEntries.filter((item) => item.status >= 400 && item.status < 500).length;
-    const s5 = chainEntries.filter((item) => item.status >= 500).length;
+    // Order 链路的统计只应基于 /orders，而不能混入 /products 的耗时；
+    // 否则注入时 /orders 的慢请求会被正常的 /products 延迟稀释。
+    const latencies = orderEntries.map((item) => item.tookMs).filter((n) => Number.isFinite(n));
+    const s2 = orderEntries.filter((item) => item.status >= 200 && item.status < 300).length;
+    const s4 = orderEntries.filter((item) => item.status >= 400 && item.status < 500).length;
+    const s5 = orderEntries.filter((item) => item.status >= 500).length;
     const errors = s4 + s5;
+    const writeTotal = orderEntries.length;
+    const write5xx = orderEntries.filter((item) => item.status >= 500).length;
+    const readTotal = productEntries.length;
+    const read5xx = productEntries.filter((item) => item.status >= 500).length;
     return {
-      requests_per_min: total,
+      requests_per_min: writeTotal,
       p99_ms: round(computePercentile(latencies, 99) || 0),
-      error_rate: round(errors / total, 4),
+      error_rate: round(writeTotal > 0 ? errors / writeTotal : 0, 4),
       p95_ms: round(computePercentile(latencies, 95) || 0),
       p50_ms: round(computePercentile(latencies, 50) || 0),
       status_2xx: s2,
       status_4xx: s4,
-      status_5xx: s5
+      status_5xx: s5,
+      write_success_rate: round(writeTotal > 0 ? 1 - write5xx / writeTotal : 1, 4),
+      read_success_rate: round(readTotal > 0 ? 1 - read5xx / readTotal : 1, 4)
     };
   } catch {
     return null;
@@ -356,7 +369,8 @@ async function collectRuntimeConsumerMetrics() {
   try {
     const { stdout } = await execCommand("docker logs --since 2m basecamp-consumer 2>&1", {
       cwd: REPO_ROOT,
-      timeout: 5 * 1000
+      timeout: 5 * 1000,
+      maxBuffer: 10 * 1024 * 1024
     });
     const now = Date.now();
     const rows = [];
@@ -406,10 +420,10 @@ function buildMockMetricsPoint(phase, tick) {
     phase === "critical" ? { lag: 720, avg: 520 } : phase === "warn" ? { lag: 180, avg: 220 } : { lag: 16, avg: 105 };
   const storageBase =
     phase === "critical"
-      ? { mysql: 138, mysqlMax: 151, redisUsed: 468, redisMax: 512, redisHit: 0.68, active: 35, keys: 17240 }
+      ? { writeSuccess: 0.82, readSuccess: 0.61, p99: 3200 }
       : phase === "warn"
-        ? { mysql: 112, mysqlMax: 151, redisUsed: 376, redisMax: 512, redisHit: 0.82, active: 18, keys: 13120 }
-        : { mysql: 56, mysqlMax: 151, redisUsed: 242, redisMax: 512, redisHit: 0.94, active: 7, keys: 9800 };
+        ? { writeSuccess: 0.93, readSuccess: 0.92, p99: 420 }
+        : { writeSuccess: 0.99, readSuccess: 0.99, p99: 28 };
 
   const requests = clamp(Math.round(orderBase.req + wave * 6 + randomInt(-3, 3)), 0, 99999);
   const errorRate = clamp(orderBase.err + wave * 0.01 + randomInt(-1, 1) * 0.004, 0, 1);
@@ -426,11 +440,9 @@ function buildMockMetricsPoint(phase, tick) {
   const offset = tick * 17 + randomInt(1, 10);
   const consumeTook = clamp(Math.round(avgProcessMs + randomInt(-20, 30)), 1, 12000);
 
-  const mysqlConnections = clamp(Math.round(storageBase.mysql + wave * 6 + randomInt(-3, 4)), 0, storageBase.mysqlMax);
-  const redisUsedMb = clamp(Math.round(storageBase.redisUsed + wave * 10 + randomInt(-6, 8)), 0, storageBase.redisMax);
-  const redisHitRate = clamp(storageBase.redisHit + wave * 0.02 + randomInt(-2, 2) * 0.005, 0, 1);
-  const activeQueries = clamp(Math.round(storageBase.active + wave * 2 + randomInt(-1, 2)), 0, 9999);
-  const redisKeys = clamp(Math.round(storageBase.keys + wave * 240 + randomInt(-80, 120)), 0, 9999999);
+  const writeSuccess = clamp(storageBase.writeSuccess + wave * 0.01 + randomInt(-1, 1) * 0.004, 0, 1);
+  const readSuccess = clamp(storageBase.readSuccess + wave * 0.01 + randomInt(-1, 1) * 0.004, 0, 1);
+  const storageP99 = clamp(Math.round(storageBase.p99 + wave * 80 + randomInt(-30, 50)), 5, 20000);
 
   return {
     order: {
@@ -450,13 +462,9 @@ function buildMockMetricsPoint(phase, tick) {
       took_ms: consumeTook
     },
     storage: {
-      mysql_connections: mysqlConnections,
-      mysql_connections_max: storageBase.mysqlMax,
-      redis_mem_used_mb: redisUsedMb,
-      redis_mem_max_mb: storageBase.redisMax,
-      redis_hit_rate: round(redisHitRate, 4),
-      mysql_active_queries: activeQueries,
-      redis_key_count: redisKeys
+      write_success_rate: round(writeSuccess, 4),
+      read_success_rate: round(readSuccess, 4),
+      p99_ms: storageP99
     }
   };
 }
@@ -476,11 +484,9 @@ async function collectMetricsSummary(basecampId, isRunning) {
       order: { requests_per_min: null, p99_ms: null, error_rate: null },
       consumer: { lag: null, avg_process_ms: null },
       storage: {
-        mysql_connections: null,
-        mysql_connections_max: null,
-        redis_mem_used_mb: null,
-        redis_mem_max_mb: null,
-        redis_hit_rate: null
+        write_success_rate: null,
+        read_success_rate: null,
+        p99_ms: null
       },
       collected_at: ts
     };
@@ -491,10 +497,16 @@ async function collectMetricsSummary(basecampId, isRunning) {
   const point = buildMockMetricsPoint(phase, state.tick);
   const runtimeOrder = await collectRuntimeOrderMetrics();
   const runtimeConsumer = await collectRuntimeConsumerMetrics();
-  const runtimeStorage = await collectRuntimeStorageMetrics();
   const order = runtimeOrder || point.order;
   const consumer = runtimeConsumer || point.consumer;
-  const storage = runtimeStorage || point.storage;
+  const storage =
+    runtimeOrder && Number.isFinite(runtimeOrder.p99_ms)
+      ? {
+          write_success_rate: runtimeOrder.write_success_rate,
+          read_success_rate: runtimeOrder.read_success_rate,
+          p99_ms: runtimeOrder.p99_ms
+        }
+      : point.storage;
 
   pushBounded(state.orderPoints, {
     ts,
@@ -516,13 +528,9 @@ async function collectMetricsSummary(basecampId, isRunning) {
   });
   pushBounded(state.storagePoints, {
     ts,
-    mysql_connections: storage.mysql_connections,
-    mysql_connections_max: storage.mysql_connections_max,
-    mysql_active_queries: storage.mysql_active_queries,
-    redis_mem_used_mb: storage.redis_mem_used_mb,
-    redis_mem_max_mb: storage.redis_mem_max_mb,
-    redis_hit_rate: storage.redis_hit_rate,
-    redis_key_count: storage.redis_key_count
+    write_success_rate: storage.write_success_rate,
+    read_success_rate: storage.read_success_rate,
+    p99_ms: storage.p99_ms
   });
 
   return {
@@ -536,11 +544,9 @@ async function collectMetricsSummary(basecampId, isRunning) {
       avg_process_ms: consumer.avg_process_ms
     },
     storage: {
-      mysql_connections: storage.mysql_connections,
-      mysql_connections_max: storage.mysql_connections_max,
-      redis_mem_used_mb: storage.redis_mem_used_mb,
-      redis_mem_max_mb: storage.redis_mem_max_mb,
-      redis_hit_rate: storage.redis_hit_rate
+      write_success_rate: storage.write_success_rate,
+      read_success_rate: storage.read_success_rate,
+      p99_ms: storage.p99_ms
     },
     collected_at: ts
   };
@@ -947,6 +953,25 @@ async function requestHandler(req, res) {
 
     if (req.method === "GET" && pathname === "/api/health") {
       sendJson(res, 200, { status: "ok" });
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/ui-config") {
+      // Control whether scenario fault injection UI is exposed.
+      // Set FAULTLAB_SHOW_SCENARIO_INJECT_UI=0 to hide injection controls in production.
+      const showScenarioInjectUi = process.env.FAULTLAB_SHOW_SCENARIO_INJECT_UI !== "0";
+      // Default off: set FAULTLAB_AUTO_INJECT_ON_PAGE=1 to enable auto-injection on scenario page load.
+      const autoInjectOnPage = process.env.FAULTLAB_AUTO_INJECT_ON_PAGE === "1";
+      sendJson(res, 200, {
+        showScenarioInjectUi,
+        enableScenarioInjection: showScenarioInjectUi,
+        autoInjectOnPage
+      });
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/runtime-config") {
+      sendJson(res, 200, { isDev: process.env.IS_DEV === "1" || process.env.NODE_ENV !== "production" });
       return;
     }
 

@@ -3,6 +3,8 @@ const { Kafka } = require("kafkajs");
 const KAFKA_BROKER = process.env.KAFKA_BROKER || "basecamp-kafka:9092";
 const TOPIC = "order.created";
 const GROUP_ID = "faultlab-consumer";
+const SUBSCRIBE_RETRIES = 20;
+const SUBSCRIBE_BACKOFF_MS = 1500;
 
 function nowIso() {
   return new Date().toISOString();
@@ -47,27 +49,49 @@ async function run() {
   }
 
   await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
-
-  await consumer.run({
-    autoCommit: true,
-    eachMessage: async ({ topic, partition, message }) => {
-      const start = Date.now();
-      const offset = Number(message.offset);
-      try {
-        await sleep(100);
-        const lag = await getLag(admin, topic, partition, offset);
-        const took = Date.now() - start;
-        process.stdout.write(
-          `[consumer] ${nowIso()} consumed ${topic} offset=${offset} lag=${lag} took=${took}ms\n`
-        );
-      } catch (err) {
-        const took = Date.now() - start;
-        process.stdout.write(
-          `[consumer] ${nowIso()} consume failed offset=${offset} took=${took}ms ERROR: ${err.message}\n`
-        );
-      }
-    },
+  await admin.createTopics({
+    waitForLeaders: true,
+    topics: [{ topic: TOPIC, numPartitions: 3, replicationFactor: 1 }],
   });
+
+  let started = false;
+  let lastErr = null;
+  for (let i = 0; i < SUBSCRIBE_RETRIES; i += 1) {
+    try {
+      await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
+      await consumer.run({
+        autoCommit: true,
+        eachMessage: async ({ topic, partition, message }) => {
+          const start = Date.now();
+          const offset = Number(message.offset);
+          try {
+            await sleep(100);
+            const lag = await getLag(admin, topic, partition, offset);
+            const took = Date.now() - start;
+            process.stdout.write(
+              `[consumer] ${nowIso()} consumed ${topic} offset=${offset} lag=${lag} took=${took}ms\n`
+            );
+          } catch (err) {
+            const took = Date.now() - start;
+            process.stdout.write(
+              `[consumer] ${nowIso()} consume failed offset=${offset} took=${took}ms ERROR: ${err.message}\n`
+            );
+          }
+        },
+      });
+      started = true;
+      break;
+    } catch (err) {
+      lastErr = err;
+      process.stdout.write(
+        `[consumer] ${nowIso()} subscribe retry ${i + 1}/${SUBSCRIBE_RETRIES} ERROR: ${err.message}\n`
+      );
+      await sleep(SUBSCRIBE_BACKOFF_MS);
+    }
+  }
+  if (!started) {
+    throw lastErr || new Error("consumer subscribe failed");
+  }
 }
 
 run().catch((err) => {

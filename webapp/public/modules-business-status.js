@@ -1,10 +1,12 @@
 (function () {
   const THRESHOLDS = {
-    error_rate: { warn: 0.05, critical: 0.15 },
-    p99_ms: { warn: 500, critical: 2000 },
+    order_success_rate: { warn: 0.95, critical: 0.85 },
+    order_p99_ms: { warn: 500, critical: 2000 },
     consumer_lag: { warn: 100, critical: 500 },
-    mysql_conn_ratio: { warn: 0.7, critical: 0.9 },
-    redis_mem_ratio: { warn: 0.7, critical: 0.9 }
+    consumer_p99_ms: { warn: 500, critical: 2000 },
+    write_success_rate: { warn: 0.95, critical: 0.85 },
+    read_success_rate: { warn: 0.95, critical: 0.85 },
+    storage_p99_ms: { warn: 200, critical: 1000 }
   };
 
   function formatValue(value, digits = 0) {
@@ -22,13 +24,33 @@
     return `${(num * 100).toFixed(digits)}%`;
   }
 
-  function getLevelClass(value, thresholdKey) {
+  function getLevelClassHigh(value, thresholdKey) {
     const conf = THRESHOLDS[thresholdKey];
     const num = Number(value);
     if (!conf || !Number.isFinite(num)) return "normal";
     if (num >= conf.critical) return "critical";
     if (num >= conf.warn) return "warn";
     return "normal";
+  }
+
+  function getLevelClassLow(value, thresholdKey) {
+    const conf = THRESHOLDS[thresholdKey];
+    const num = Number(value);
+    if (!conf || !Number.isFinite(num)) return "normal";
+    if (num <= conf.critical) return "critical";
+    if (num <= conf.warn) return "warn";
+    return "normal";
+  }
+
+  function mergeLevel(a, b) {
+    const order = { normal: 0, warn: 1, critical: 2 };
+    return (order[a] || 0) >= (order[b] || 0) ? a : b;
+  }
+
+  function formatMetricWithBadge(valueText, level) {
+    if (level === "critical") return `🔴 ${valueText}`;
+    if (level === "warn") return `🟡 ${valueText}`;
+    return valueText;
   }
 
   function renderSparkline(points, valueKey) {
@@ -77,42 +99,42 @@
       const order = summary?.order || {};
       const consumer = summary?.consumer || {};
       const storage = summary?.storage || {};
-      const mysqlRatio =
-        Number(storage.mysql_connections_max) > 0 ? Number(storage.mysql_connections) / Number(storage.mysql_connections_max) : NaN;
-      const redisRatio =
-        Number(storage.redis_mem_max_mb) > 0 ? Number(storage.redis_mem_used_mb) / Number(storage.redis_mem_max_mb) : NaN;
+      const orderSuccessRate = Number.isFinite(Number(order.error_rate)) ? 1 - Number(order.error_rate) : NaN;
+      const orderSuccessLevel = getLevelClassLow(orderSuccessRate, "order_success_rate");
+      const orderP99Level = getLevelClassHigh(order.p99_ms, "order_p99_ms");
+      const consumerLagLevel = getLevelClassHigh(consumer.lag, "consumer_lag");
+      const consumerProcLevel = getLevelClassHigh(consumer.avg_process_ms, "consumer_p99_ms");
+      const writeLevel = getLevelClassLow(storage.write_success_rate, "write_success_rate");
+      const readLevel = getLevelClassLow(storage.read_success_rate, "read_success_rate");
+      const storageP99Level = getLevelClassHigh(storage.p99_ms, "storage_p99_ms");
       const chains = [
         {
           key: "order",
           name: "下单链路",
-          statusClass: getLevelClass(order.error_rate, "error_rate") === "critical" || getLevelClass(order.p99_ms, "p99_ms") === "critical" ? "critical" : getLevelClass(order.error_rate, "error_rate") === "warn" || getLevelClass(order.p99_ms, "p99_ms") === "warn" ? "warn" : "normal",
+          statusClass: mergeLevel(orderSuccessLevel, orderP99Level),
           metrics: [
-            ["请求量", `${formatValue(order.requests_per_min)} 次/分钟`, "order.requests_per_min"],
-            ["P99 延迟", `${formatValue(order.p99_ms)} ms`, "order.p99_ms"],
-            ["错误率", formatPercent(order.error_rate), "order.error_rate"]
+            ["成功率", formatMetricWithBadge(formatPercent(orderSuccessRate, 0), orderSuccessLevel), "order.success_rate"],
+            ["P99 延迟", formatMetricWithBadge(`${formatValue(order.p99_ms)} ms`, orderP99Level), "order.p99_ms"],
+            ["请求量", `${formatValue(order.requests_per_min)} 次/分钟`, "order.requests_per_min"]
           ]
         },
         {
           key: "consumer",
           name: "消息链路",
-          statusClass: getLevelClass(consumer.lag, "consumer_lag"),
+          statusClass: mergeLevel(consumerLagLevel, consumerProcLevel),
           metrics: [
-            ["Consumer Lag", `${formatValue(consumer.lag)} 条`, "consumer.lag"],
-            ["处理耗时", `${formatValue(consumer.avg_process_ms)} ms`, "consumer.avg_process_ms"]
+            ["消息积压", formatMetricWithBadge(`${formatValue(consumer.lag)} 条`, consumerLagLevel), "consumer.lag"],
+            ["处理耗时", formatMetricWithBadge(`${formatValue(consumer.avg_process_ms)} ms`, consumerProcLevel), "consumer.avg_process_ms"]
           ]
         },
         {
           key: "storage",
           name: "存储层",
-          statusClass:
-            getLevelClass(mysqlRatio, "mysql_conn_ratio") === "critical" || getLevelClass(redisRatio, "redis_mem_ratio") === "critical"
-              ? "critical"
-              : getLevelClass(mysqlRatio, "mysql_conn_ratio") === "warn" || getLevelClass(redisRatio, "redis_mem_ratio") === "warn"
-                ? "warn"
-                : "normal",
+          statusClass: mergeLevel(mergeLevel(writeLevel, readLevel), storageP99Level),
           metrics: [
-            ["MySQL 连接数", Number.isFinite(mysqlRatio) ? `${formatValue(storage.mysql_connections)} / ${formatValue(storage.mysql_connections_max)}` : "— —", "storage.mysql_ratio"],
-            ["Redis 内存使用率", Number.isFinite(redisRatio) ? formatPercent(redisRatio) : "— —", "storage.redis_ratio"]
+            ["写入成功率", formatMetricWithBadge(formatPercent(storage.write_success_rate, 0), writeLevel), "storage.write_success_rate"],
+            ["读取成功率", formatMetricWithBadge(formatPercent(storage.read_success_rate, 0), readLevel), "storage.read_success_rate"],
+            ["存储响应 P99", formatMetricWithBadge(`${formatValue(storage.p99_ms)} ms`, storageP99Level), "storage.p99_ms"]
           ]
         }
       ];
@@ -179,7 +201,7 @@
         return;
       }
       const latest = points[points.length - 1] || {};
-      detailEl.innerHTML = `<div class="detail-section"><h3 class="detail-title">存储层详情</h3><div class="sparkline-wrap">${renderSparkline(points, "mysql_connections")}</div><div class="detail-meta-grid"><div class="info-item"><div class="info-label">MySQL 活跃查询数</div><div class="info-value">${formatValue(latest.mysql_active_queries)}</div></div><div class="info-item"><div class="info-label">Redis 命中率</div><div class="info-value">${formatPercent(latest.redis_hit_rate)}</div></div><div class="info-item"><div class="info-label">Redis 内存</div><div class="info-value">${formatValue(latest.redis_mem_used_mb)} / ${formatValue(latest.redis_mem_max_mb)} MB</div></div><div class="info-item"><div class="info-label">Redis Key 数量</div><div class="info-value">${formatValue(latest.redis_key_count)}</div></div></div></div>`;
+      detailEl.innerHTML = `<div class="detail-section"><h3 class="detail-title">存储层详情</h3><div class="sparkline-wrap">${renderSparkline(points, "p99_ms")}</div><div class="detail-meta-grid"><div class="info-item"><div class="info-label">写入成功率</div><div class="info-value">${formatPercent(latest.write_success_rate, 0)}</div></div><div class="info-item"><div class="info-label">读取成功率</div><div class="info-value">${formatPercent(latest.read_success_rate, 0)}</div></div><div class="info-item"><div class="info-label">存储响应 P99</div><div class="info-value">${formatValue(latest.p99_ms)} ms</div></div></div></div>`;
     }
 
     async function refreshSummary() {
@@ -201,7 +223,6 @@
         statusEl.textContent = "最后更新时间：刷新失败";
       }
     }
-
     refreshSummary();
     timer = setInterval(refreshSummary, 3000);
     return {

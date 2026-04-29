@@ -162,9 +162,13 @@
       isRunning,
       getFaultState,
       setFaultState,
-      variant
+      variant,
+      enableScenarioInjection,
+      autoInjectOnPage
     } = options;
     const shellVariant = variant || "full";
+    const allowScenarioInjection = enableScenarioInjection !== false;
+    const allowAutoInjectOnPage = !!autoInjectOnPage;
     containerEl.innerHTML =
       shellVariant === "actions-only"
         ? '<div data-action-slot></div>'
@@ -191,6 +195,7 @@
             setBusyAction,
             getActionState: (action) => {
               const running = isRunning();
+              if (!allowScenarioInjection) return { disabled: true };
               const faultState = (getFaultState && getFaultState()) || "not_injected";
               if (!running) return { disabled: true };
               if (action === "inject") return { disabled: faultState === "injected" };
@@ -199,6 +204,7 @@
               return { disabled: false };
             },
             runAction: async (action) => {
+              if (!allowScenarioInjection) return;
               if (action === "inject" || action === "reinject") {
                 await postAction(
                   `/api/basecamps/${encodeURIComponent(basecampId)}/scenarios/${encodeURIComponent(scenarioId)}/inject`
@@ -237,7 +243,7 @@
             })
           : { refresh() {}, unmount() {} };
 
-    if (scenarioMode) {
+    if (scenarioMode && allowScenarioInjection && allowAutoInjectOnPage) {
       const faultState = (getFaultState && getFaultState()) || "not_injected";
       if (isRunning() && faultState !== "injected" && !getBusyAction()) {
         setBusyAction("inject");
