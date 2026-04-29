@@ -2,8 +2,10 @@ let cachedBasecamps = [];
 let startInProgress = new Set();
 let cachedScenarioPages = new Map();
 let cachedBasecampDetails = new Map();
+let cachedScenarioDetails = new Map();
 let pollTimer = null;
-let basecampActionBusy = new Map();
+let moduleRuntimeRef = null;
+let scenarioListUnsubscribe = null;
 
 function escapeHtml(text) {
   return String(text)
@@ -22,18 +24,6 @@ async function fetchJson(url) {
 
 async function postAction(url) {
   const response = await fetch(url, { method: "POST" });
-  if (!response.ok) {
-    throw new Error(`request failed: ${response.status}`);
-  }
-  return response.json();
-}
-
-async function postJson(url, body) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
   if (!response.ok) {
     throw new Error(`request failed: ${response.status}`);
   }
@@ -176,13 +166,18 @@ function renderBasecamps() {
 }
 
 function renderScenarioListPage(basecampId, scenarios, filters) {
+  if (moduleRuntimeRef) moduleRuntimeRef.unmount();
+  moduleRuntimeRef = null;
+  if (scenarioListUnsubscribe) {
+    scenarioListUnsubscribe();
+    scenarioListUnsubscribe = null;
+  }
   const basecamp = cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((item) => item.id === basecampId);
   const basecampName = basecamp?.name || basecampId;
   const statusText = getStatusText(basecamp?.status);
   const resourceLevelText = getResourceLevelText(basecamp?.resource_level);
   const scenarioCount = Number(basecamp?.scenario_count || scenarios.length || 0);
   const isRunning = basecamp?.status === "running";
-  const busyAction = basecampActionBusy.get(basecampId) || "";
 
   mountApp(`
     <div class="route-basecamp">
@@ -194,6 +189,7 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
         <div class="basecamp-info-row">
           <div class="basecamp-info-text">
             <h2 class="section-title">${escapeHtml(basecampName)}</h2>
+            <div id="project-action-slot"></div>
             <p class="muted basecamp-statusline">状态：${escapeHtml(statusText)} · ${escapeHtml(scenarioCount)} 个场景 · ${escapeHtml(resourceLevelText)}</p>
             <p class="muted basecamp-intro2">${escapeHtml(basecamp?.intro || "暂无描述")}</p>
             <div class="info-grid">
@@ -211,44 +207,12 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
         </div>
       </section>
 
-      <section class="panel ops-panel">
-        <div class="ops-actions">
-          <div class="op-buttons">
-            <button class="primary-btn small" id="start-btn" ${isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
-              busyAction === "start" ? "启动中…" : "启动"
-            )}</button>
-            <button class="ghost-btn small" id="restart-btn" ${!isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
-              busyAction === "restart" ? "重启中…" : "重启"
-            )}</button>
-            <button class="ghost-btn danger small" id="stop-btn" ${!isRunning || busyAction ? "disabled" : ""}>${escapeHtml(
-              busyAction === "stop" ? "停止中…" : "停止"
-            )}</button>
-            <button class="ghost-btn danger small" id="clean-btn" ${busyAction ? "disabled" : ""}>${escapeHtml(
-              busyAction === "clean" ? "清理中…" : "清理"
-            )}</button>
-          </div>
-        </div>
+      <div id="business-status-slot"></div>
+      <div id="shell-module-slot"></div>
 
-        <div class="terminal-toolbar">
-          <div class="terminal-toolbar-left">
-            <span class="filter-label">容器</span>
-            <div id="container-tabs" class="container-tabs">加载中…</div>
-          </div>
-          <div class="terminal-toolbar-right">
-            <span class="muted terminal-hint">在容器内输入 <code>exit</code> 可回到本机</span>
-          </div>
-        </div>
-
-        <select id="container-select" class="hidden-select" aria-hidden="true" tabindex="-1">
-          <option value="">加载中…</option>
-        </select>
-
-        <div class="terminal-status muted" id="terminal-status">未连接</div>
-        <div id="terminal" class="terminal-box"></div>
-        <p class="muted action-hint" id="action-hint"></p>
-      </section>
-
-      <section class="panel scenarios-panel">
+      ${
+        isRunning
+          ? `<section class="panel scenarios-panel">
         <div class="filters">
           <label class="filter">
             <span class="filter-label">难度</span>
@@ -274,7 +238,9 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
         </div>
 
         <div id="scenario-list" class="scenario-grid">加载中...</div>
-      </section>
+      </section>`
+          : `<section class="panel scenarios-panel"><p class="muted">底座未启动成功，场景列表已隐藏。</p></section>`
+      }
     </div>
   `);
 
@@ -282,145 +248,49 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
     window.location.hash = "#/";
   });
 
-  async function runAction(action) {
-    if (basecampActionBusy.get(basecampId)) return;
-    const latestBasecamp =
-      cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((item) => item.id === basecampId);
-    const running = latestBasecamp?.status === "running";
-    if (action === "start" && running) return;
-    if ((action === "stop" || action === "restart") && !running) return;
-
-    basecampActionBusy.set(basecampId, action);
-
-    // Optimistic status updates to avoid repeated clicks while Docker state is converging.
-    if (latestBasecamp) {
-      if (action === "stop" || action === "clean") {
-        cachedBasecampDetails.set(basecampId, { ...latestBasecamp, status: "stopped" });
-      }
-      if (action === "start" || action === "restart") {
-        cachedBasecampDetails.set(basecampId, { ...latestBasecamp, status: "unknown" });
-      }
-    }
-
-    renderScenarioListPage(basecampId, scenarios, filters);
-    const hintEl = document.getElementById("action-hint");
-    hintEl.textContent = "执行中…";
-    try {
-      if (action === "start") {
-        await postAction(`/api/basecamps/${encodeURIComponent(basecampId)}/start`);
-      } else {
-        await postAction(`/api/basecamps/${encodeURIComponent(basecampId)}/${action}`);
-      }
-      hintEl.textContent = "已提交操作，等待状态刷新。";
+  const statusSlot = document.getElementById("business-status-slot");
+  const projectActionSlot = document.getElementById("project-action-slot");
+  const shellSlot = document.getElementById("shell-module-slot");
+  const store = window.FaultLabStore;
+  const isRunningForBasecamp = () => {
+    const item = cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((v) => v.id === basecampId);
+    return item?.status === "running";
+  };
+  moduleRuntimeRef = window.FaultLabModuleRuntime.mountBasecampModules({
+    basecampId,
+    shellMode: "basecamp",
+    businessContainerEl: statusSlot,
+    shellActionContainerEl: projectActionSlot,
+    shellTerminalContainerEl: shellSlot,
+    fetchJson,
+    postAction: async (url) => {
+      await postAction(url);
       cachedBasecampDetails.delete(basecampId);
       await loadBasecampDetail(basecampId);
-      await bootTerminal();
-    } catch {
-      hintEl.textContent = "操作失败，请检查 Docker 是否运行。";
-    } finally {
-      basecampActionBusy.delete(basecampId);
-      // Re-render to update button states.
-      const latestScenarios = cachedScenarioPages.get(basecampId) || scenarios;
-      const route = parseRoute();
-      renderScenarioListPage(basecampId, latestScenarios, route.filters || filters);
-    }
-  }
-
-  document.getElementById("start-btn").addEventListener("click", () => runAction("start"));
-  document.getElementById("restart-btn").addEventListener("click", () => runAction("restart"));
-  document.getElementById("stop-btn").addEventListener("click", () => runAction("stop"));
-  document.getElementById("clean-btn").addEventListener("click", () => runAction("clean"));
-
-  async function loadContainers() {
-    const selectEl = document.getElementById("container-select");
-    const tabsEl = document.getElementById("container-tabs");
-    try {
-      const data = await fetchJson(`/api/basecamps/${encodeURIComponent(basecampId)}/containers`);
-      const containers = Array.isArray(data.containers) ? data.containers : [];
-      const simplify = (name) => {
-        const prefix = `${basecampId}-`;
-        return typeof name === "string" && name.startsWith(prefix) ? name.slice(prefix.length) : name;
-      };
-      const options = [{ value: "host:", label: "本机" }].concat(
-        containers.map((c) => ({ value: `container:${c.name}`, label: simplify(c.name) }))
-      );
-
-      selectEl.innerHTML = options
-        .map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`)
-        .join("");
-
-      // Default: do NOT preselect any container; connect to host instead.
-      const current = selectEl.value || "host:";
-      selectEl.value = current;
-
-      const renderTab = (value, label) => {
-        const active = value === current ? "active" : "";
-        const isHost = value === "host:";
-        const containerName = isHost ? "" : value.replace(/^container:/, "");
-        const containerInfo = containers.find((c) => c.name === containerName);
-        const status = containerInfo?.status || "";
-        const isUp = isHost || status.startsWith("Up");
-        const disabled = isUp ? "" : "disabled";
-        const cls = `${active} ${isUp ? "" : "disabled"}`.trim();
-        return `<button class="container-tab ${cls}" data-value="${escapeHtml(value)}" ${disabled}>${escapeHtml(
-          label
-        )}</button>`;
-      };
-
-      tabsEl.innerHTML = options.map((o) => renderTab(o.value, o.label)).join("");
-
-      for (const btn of tabsEl.querySelectorAll("button.container-tab")) {
-        btn.addEventListener("click", () => {
-          if (btn.disabled) return;
-          const value = btn.dataset.value;
-          if (!value) return;
-          selectEl.value = value;
-          selectEl.dispatchEvent(new Event("change"));
-          // Update active state
-          for (const b of tabsEl.querySelectorAll("button.container-tab")) {
-            b.classList.toggle("active", b.dataset.value === value);
-          }
-        });
-      }
-
-      return containers;
-    } catch {
-      selectEl.innerHTML = '<option value="">加载失败</option>';
-      tabsEl.textContent = "加载失败";
-      return [];
-    }
-  }
-
-  let terminalController = null;
-  async function bootTerminal() {
-    await loadContainers();
-    const containerSelectEl = document.getElementById("container-select");
-    const terminalMountEl = document.getElementById("terminal");
-    const statusEl = document.getElementById("terminal-status");
-
-    if (!containerSelectEl.value) {
-      statusEl.textContent = "无可用容器";
-      return;
-    }
-
-    if (!window.FaultLabTerminal?.mountInteractiveShell) {
-      statusEl.textContent = "终端加载失败";
-      return;
-    }
-
-    if (terminalController) terminalController.close();
-    terminalController = window.FaultLabTerminal.mountInteractiveShell({
-      basecampId,
-      containerSelectEl,
-      terminalMountEl,
-      statusEl
-    });
-  }
-
-  bootTerminal();
+      const snapshot = store.getState();
+      store.setState({
+        basecampsById: {
+          ...snapshot.basecampsById,
+          [basecampId]: cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((v) => v.id === basecampId) || null
+        }
+      });
+    },
+    getBusyAction: () => (store.getState().opsBusyById || {})[basecampId] || "",
+    setBusyAction: (action) => {
+      const snapshot = store.getState();
+      store.setState({
+        opsBusyById: {
+          ...snapshot.opsBusyById,
+          [basecampId]: action || ""
+        }
+      });
+    },
+    isRunning: isRunningForBasecamp
+  });
 
   const difficultyEl = document.getElementById("difficulty-filter");
   const contextEl = document.getElementById("context-filter");
+  if (!isRunning || !difficultyEl || !contextEl) return;
   difficultyEl.value = filters.difficulty || "";
   contextEl.value = filters.context || "";
 
@@ -442,30 +312,306 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
     }
 
     listEl.innerHTML = filtered
-      .map((s, idx) => {
+      .map((s) => {
         const title = s.title || "未命名场景";
+        const scenarioId = s.scenario_id || "";
         const ctx = getBusinessContextText(s.business_context);
         const diff = getDifficultyText(s.difficulty);
+        const scenarioKey = `${basecampId}::${scenarioId}`;
+        const faultState = (store.getState().faultStateByScenario || {})[scenarioKey] || s.fault_state || "not_injected";
+        const injectedTag = faultState === "injected" ? '<span class="scenario-tag injected">已注入</span>' : '<span class="scenario-tag">未注入</span>';
         const durationText =
           s.duration_min && s.duration_max ? `${s.duration_min}–${s.duration_max} 分钟` : "时长未知";
         return `
-          <article class="scenario-card" data-idx="${idx}">
-            <strong class="scenario-title">${escapeHtml(title)}</strong>
+          <article class="scenario-card" data-scenario-id="${escapeHtml(scenarioId)}">
+            <div class="scenario-title-row">
+              <strong class="scenario-title">${escapeHtml(title)}</strong>
+              ${injectedTag}
+            </div>
             <div class="scenario-meta">${escapeHtml(`${ctx} · ${diff} · ${durationText}`)}</div>
           </article>
         `;
       })
       .join("");
+
+    for (const card of listEl.querySelectorAll(".scenario-card")) {
+      card.addEventListener("click", () => {
+        const scenarioId = card.dataset.scenarioId;
+        if (!scenarioId) return;
+        window.location.hash = `#/basecamps/${encodeURIComponent(basecampId)}/scenarios/${encodeURIComponent(scenarioId)}`;
+      });
+    }
   }
 
   difficultyEl.addEventListener("change", applyAndRender);
   contextEl.addEventListener("change", applyAndRender);
+  scenarioListUnsubscribe = store.subscribe(() => {
+    applyAndRender();
+  });
 
   applyAndRender();
 }
 
+function renderScenarioDetailPage(basecampId, scenario) {
+  if (moduleRuntimeRef) moduleRuntimeRef.unmount();
+  moduleRuntimeRef = null;
+  if (scenarioListUnsubscribe) {
+    scenarioListUnsubscribe();
+    scenarioListUnsubscribe = null;
+  }
+  const title = scenario?.title || "未命名场景";
+  const brief = String(scenario?.scenario_brief || "");
+  const guide = String(scenario?.troubleshooting_guide || "");
+  const messages = [];
+  const scenarioStateKey = `${basecampId}::${scenario?.scenario_id || ""}`;
+
+  function extractFirstParagraph(markdown) {
+    const cleaned = String(markdown || "")
+      .replace(/^#.*$/gm, "")
+      .replace(/^>.*$/gm, "")
+      .trim();
+    const blocks = cleaned.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
+    return blocks[0] || "暂无业务剧本。";
+  }
+
+  function extractReferenceLinks(markdown) {
+    const links = [];
+    const mdLinkRegex = /\[[^\]]+\]\((https?:\/\/[^)]+)\)/g;
+    let mdMatch;
+    while ((mdMatch = mdLinkRegex.exec(markdown))) {
+      links.push(mdMatch[1]);
+    }
+    const plainUrlRegex = /(https?:\/\/[^\s)]+)/g;
+    let urlMatch;
+    while ((urlMatch = plainUrlRegex.exec(markdown))) {
+      links.push(urlMatch[1]);
+    }
+    return Array.from(new Set(links)).slice(0, 6);
+  }
+
+  function getReferenceLabel(url, idx) {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.replace(/^www\./, "");
+      if (host.includes("mysql.com")) return `MySQL 文档 ${idx + 1}`;
+      if (host.includes("redis.io")) return `Redis 文档 ${idx + 1}`;
+      if (host.includes("kafka.apache.org")) return `Kafka 文档 ${idx + 1}`;
+      return `${host} 参考 ${idx + 1}`;
+    } catch {
+      return `参考资料 ${idx + 1}`;
+    }
+  }
+
+  const focusBrief = extractFirstParagraph(brief);
+  const references = extractReferenceLinks(guide);
+  const durationText =
+    scenario?.duration_min && scenario?.duration_max
+      ? `${scenario.duration_min}–${scenario.duration_max} 分钟`
+      : "时长未知";
+  const difficultyText = getDifficultyText(scenario?.difficulty);
+  const contextText = getBusinessContextText(scenario?.business_context);
+
+  mountApp(`
+    <div class="route-basecamp">
+      <div class="page-nav">
+        <button class="ghost-btn" id="back-to-list-btn">返回场景列表</button>
+      </div>
+      <div id="business-status-slot"></div>
+      <section class="panel scenario-detail-panel">
+        <div class="scenario-head-row">
+          <h2>${escapeHtml(title)}</h2>
+          <div class="scenario-head-actions">
+            <span id="scenario-inject-tag" class="scenario-tag">未注入</span>
+            <button id="scenario-inject-btn" class="ghost-btn small">注入故障</button>
+          </div>
+        </div>
+        <div class="scenario-detail-content">
+          <div class="scenario-detail-block">
+            <div class="info-label">关注信息</div>
+            <div class="info-value">${escapeHtml(`${contextText} · ${difficultyText} · ${durationText}`)}</div>
+            <pre class="detail-pre">${escapeHtml(focusBrief)}</pre>
+          </div>
+          <div class="scenario-detail-block">
+            <div class="info-label">参考资料</div>
+            <div class="reference-list">
+              ${
+                references.length
+                  ? references
+                      .map((url, idx) => `<a class="reference-chip" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(getReferenceLabel(url, idx))}</a>`)
+                      .join("")
+                  : '<span class="muted">暂无参考资料</span>'
+              }
+            </div>
+          </div>
+        </div>
+      </section>
+      <div id="shell-module-slot"></div>
+      <section class="panel llm-panel">
+        <h2>分析对话</h2>
+        <div id="llm-messages" class="llm-messages"></div>
+        <div class="llm-input-row">
+          <textarea id="llm-input" class="llm-input" placeholder="描述你的判断…"></textarea>
+          <button id="llm-send-btn" class="primary-btn">发送</button>
+        </div>
+      </section>
+    </div>
+  `);
+
+  document.getElementById("back-to-list-btn").addEventListener("click", () => {
+    window.location.hash = `#/basecamps/${encodeURIComponent(basecampId)}`;
+  });
+
+  const statusSlot = document.getElementById("business-status-slot");
+  const shellSlot = document.getElementById("shell-module-slot");
+  const store = window.FaultLabStore;
+  const isRunningForBasecamp = () => {
+    const item = cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((v) => v.id === basecampId);
+    return item?.status === "running";
+  };
+  moduleRuntimeRef = window.FaultLabModuleRuntime.mountBasecampModules({
+    basecampId,
+    scenarioId: scenario?.scenario_id || "",
+    shellMode: "scenario",
+    businessContainerEl: statusSlot,
+    shellTerminalContainerEl: shellSlot,
+    fetchJson,
+    postAction: async (url) => {
+      await postAction(url);
+      cachedBasecampDetails.delete(basecampId);
+      await loadBasecampDetail(basecampId);
+      const snapshot = store.getState();
+      store.setState({
+        basecampsById: {
+          ...snapshot.basecampsById,
+          [basecampId]: cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((v) => v.id === basecampId) || null
+        }
+      });
+    },
+    getBusyAction: () => (store.getState().opsBusyById || {})[scenarioStateKey] || "",
+    setBusyAction: (action) => {
+      const snapshot = store.getState();
+      store.setState({
+        opsBusyById: {
+          ...snapshot.opsBusyById,
+          [scenarioStateKey]: action || ""
+        }
+      });
+    },
+    getFaultState: () => (store.getState().faultStateByScenario || {})[scenarioStateKey] || "not_injected",
+    setFaultState: (value) => {
+      const snapshot = store.getState();
+      store.setState({
+        faultStateByScenario: {
+          ...(snapshot.faultStateByScenario || {}),
+          [scenarioStateKey]: value || "not_injected"
+        }
+      });
+    },
+    isRunning: isRunningForBasecamp
+  });
+
+  const injectTagEl = document.getElementById("scenario-inject-tag");
+  const injectBtnEl = document.getElementById("scenario-inject-btn");
+  function renderInjectState() {
+    const state = (store.getState().faultStateByScenario || {})[scenarioStateKey] || "not_injected";
+    const busy = (store.getState().opsBusyById || {})[scenarioStateKey] || "";
+    if (state === "injected") {
+      injectTagEl.textContent = "已注入";
+      injectTagEl.className = "scenario-tag injected";
+      injectBtnEl.style.display = "none";
+      return;
+    }
+    if (state === "failed") {
+      injectTagEl.textContent = "注入失败";
+      injectTagEl.className = "scenario-tag failed";
+    } else {
+      injectTagEl.textContent = "未注入";
+      injectTagEl.className = "scenario-tag";
+    }
+    injectBtnEl.style.display = "inline-flex";
+    injectBtnEl.disabled = !!busy || !isRunningForBasecamp();
+    injectBtnEl.textContent = busy === "inject" ? "注入中…" : "注入故障";
+  }
+
+  injectBtnEl.addEventListener("click", async () => {
+    const snapshot = store.getState();
+    store.setState({
+      opsBusyById: {
+        ...(snapshot.opsBusyById || {}),
+        [scenarioStateKey]: "inject"
+      }
+    });
+    renderInjectState();
+    try {
+      await postAction(
+        `/api/basecamps/${encodeURIComponent(basecampId)}/scenarios/${encodeURIComponent(scenario?.scenario_id || "")}/inject`
+      );
+      const s = store.getState();
+      store.setState({
+        faultStateByScenario: {
+          ...(s.faultStateByScenario || {}),
+          [scenarioStateKey]: "injected"
+        }
+      });
+    } catch {
+      const s = store.getState();
+      store.setState({
+        faultStateByScenario: {
+          ...(s.faultStateByScenario || {}),
+          [scenarioStateKey]: "failed"
+        }
+      });
+    } finally {
+      const s = store.getState();
+      store.setState({
+        opsBusyById: {
+          ...(s.opsBusyById || {}),
+          [scenarioStateKey]: ""
+        }
+      });
+      renderInjectState();
+    }
+  });
+  renderInjectState();
+
+  const messagesEl = document.getElementById("llm-messages");
+  const inputEl = document.getElementById("llm-input");
+  const sendBtn = document.getElementById("llm-send-btn");
+  function renderMessages() {
+    if (!messages.length) {
+      messagesEl.innerHTML = '<p class="muted">输入你的排查判断，系统会返回引导建议。</p>';
+      return;
+    }
+    messagesEl.innerHTML = messages
+      .map((item) => `<div class="llm-msg ${item.role}"><strong>${item.role === "user" ? "你" : "助手"}：</strong>${escapeHtml(item.text)}</div>`)
+      .join("");
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+  async function sendMessage() {
+    const text = String(inputEl.value || "").trim();
+    if (!text) return;
+    messages.push({ role: "user", text });
+    messages.push({ role: "assistant", text: "已收到你的判断。下一步建议：优先对比业务状态里的异常指标，再在 shell 中验证对应链路。" });
+    inputEl.value = "";
+    renderMessages();
+  }
+  sendBtn.addEventListener("click", sendMessage);
+  inputEl.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") sendMessage();
+  });
+  renderMessages();
+}
+
 function parseRoute() {
   const hash = window.location.hash || "#/";
+  const detailMatch = hash.match(/^#\/basecamps\/([^/?#]+)\/scenarios\/([^/?#]+)(?:\?(.*))?$/);
+  if (detailMatch) {
+    return {
+      name: "scenario-detail",
+      basecampId: decodeURIComponent(detailMatch[1]),
+      scenarioId: decodeURIComponent(detailMatch[2])
+    };
+  }
   const match = hash.match(/^#\/basecamps\/([^/?#]+)(?:\?(.*))?$/);
   if (match) {
     const basecampId = decodeURIComponent(match[1]);
@@ -504,7 +650,31 @@ async function loadBasecampDetail(basecampId) {
   return basecamp;
 }
 
+async function loadScenarioDetail(basecampId, scenarioId) {
+  const cacheKey = `${basecampId}::${scenarioId}`;
+  if (cachedScenarioDetails.has(cacheKey)) return cachedScenarioDetails.get(cacheKey);
+  const data = await fetchJson(`/api/basecamps/${encodeURIComponent(basecampId)}/scenarios/${encodeURIComponent(scenarioId)}`);
+  const scenario = data.scenario || null;
+  if (scenario) {
+    cachedScenarioDetails.set(cacheKey, scenario);
+    const snapshot = window.FaultLabStore.getState();
+    window.FaultLabStore.setState({
+      faultStateByScenario: {
+        ...(snapshot.faultStateByScenario || {}),
+        [cacheKey]: scenario.fault_state || "not_injected"
+      }
+    });
+  }
+  return scenario;
+}
+
 async function renderRoute() {
+  if (moduleRuntimeRef) moduleRuntimeRef.unmount();
+  moduleRuntimeRef = null;
+  if (scenarioListUnsubscribe) {
+    scenarioListUnsubscribe();
+    scenarioListUnsubscribe = null;
+  }
   const route = parseRoute();
   if (route.name === "home") {
     renderHome();
@@ -521,6 +691,28 @@ async function renderRoute() {
     await loadBasecampDetail(route.basecampId);
     const scenarios = await loadBasecampScenarios(route.basecampId);
     renderScenarioListPage(route.basecampId, scenarios, route.filters);
+    return;
+  }
+
+  if (route.name === "scenario-detail") {
+    mountApp(`
+      <section class="panel">
+        <h2>加载中…</h2>
+        <p class="muted">正在获取场景详情</p>
+      </section>
+    `);
+    await loadBasecampDetail(route.basecampId);
+    const scenario = await loadScenarioDetail(route.basecampId, route.scenarioId);
+    if (!scenario) {
+      mountApp(`
+        <section class="panel">
+          <h2>未找到场景</h2>
+          <p class="muted">请返回场景列表重试。</p>
+        </section>
+      `);
+      return;
+    }
+    renderScenarioDetailPage(route.basecampId, scenario);
   }
 }
 
@@ -529,6 +721,9 @@ async function boot() {
     try {
       const data = await fetchJson("/api/basecamps");
       cachedBasecamps = Array.isArray(data.basecamps) ? data.basecamps : [];
+      const byId = {};
+      for (const item of cachedBasecamps) byId[item.id] = item;
+      window.FaultLabStore.setState({ basecampsById: byId });
     } catch {
       // ignore; route render handles empty state
     }
