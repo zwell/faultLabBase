@@ -1,5 +1,6 @@
 id: mysql-001
-title: 连接池打满，支付回调超时
+title: 大促窗口里，支付回调变慢，订单长时间停在处理中
+title_reveal: 连接池打满，支付回调超时（MySQL 连接上限过低）
 tech: mysql
 difficulty: 3
 duration_min: 25

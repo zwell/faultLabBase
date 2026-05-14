@@ -1,4 +1,4 @@
-# [场景标题] <!-- 例：Kafka 消费者 Rebalance 风暴 -->
+# [场景标题] <!-- 与 meta.yaml 的 title（现象标题）一致；勿把 title_reveal（揭题标题）写进 README 首行 -->
 
 > **难度**：⭐⭐☆☆☆ &nbsp;|&nbsp; **技术栈**：Kafka 2.x / Docker &nbsp;|&nbsp; **预计时长**：30–45 分钟  
 > **前置知识**：Consumer Group 基本概念、`kafka-consumer-groups.sh` 基本用法  

@@ -1,0 +1,15 @@
+id: redis-002
+title: 库存链路间歇出现连接类错误，重试次数变多
+title_reveal: Redis 最大客户端数过低，连接被拒绝
+tech: redis
+difficulty: 2
+duration_min: 15
+duration_max: 30
+resource_level: light
+tags:
+  - redis
+  - maxclients
+  - connection
+parameter_intervention: true
+requires_basecamp: true
+business_context: inventory

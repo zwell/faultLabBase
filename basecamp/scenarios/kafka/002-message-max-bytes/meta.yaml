@@ -1,0 +1,15 @@
+id: kafka-002
+title: 部分下单失败陡增，日志里卡在「写事件」那一步
+title_reveal: 单条消息上限过小，订单事件发布失败
+tech: kafka
+difficulty: 3
+duration_min: 25
+duration_max: 45
+resource_level: heavy
+tags:
+  - kafka
+  - producer
+  - message-size
+parameter_intervention: true
+requires_basecamp: true
+business_context: order

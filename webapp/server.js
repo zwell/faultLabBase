@@ -152,6 +152,67 @@ async function loadProjectScenarios(project) {
   return scenarios;
 }
 
+/** 降低 metrics 轮询时的重复读盘（场景目录不常变） */
+const projectScenariosCache = new Map(); // projectId -> { ts, scenarios }
+
+async function getProjectScenariosCached(project) {
+  if (!project?.id) return [];
+  const pid = project.id;
+  const ttlMs = 60_000;
+  const now = Date.now();
+  const hit = projectScenariosCache.get(pid);
+  if (hit && now - hit.ts < ttlMs) return hit.scenarios;
+  const scenarios = await loadProjectScenarios(project);
+  projectScenariosCache.set(pid, { ts: now, scenarios });
+  return scenarios;
+}
+
+/** 与业务状态面板三条链路（下单 / 消息 / 存储）对齐，用于高亮与归类 */
+function computeHighlightChainsForScenario(scenario) {
+  const meta = scenario?.meta || {};
+  const ctx = String(meta.business_context || "").toLowerCase();
+  const dir = String(scenario?.dir || "").replace(/\\/g, "/").toLowerCase();
+  const chains = new Set();
+
+  if (ctx === "order") chains.add("order");
+  else if (ctx === "payment") chains.add("order");
+  else if (ctx === "search") chains.add("storage");
+  else if (ctx === "inventory") chains.add("storage");
+  else chains.add("order");
+
+  if (dir.includes("/kafka/")) chains.add("consumer");
+  if (dir.includes("/mysql/") || dir.includes("/redis/")) chains.add("storage");
+  if (dir.includes("/nginx/")) chains.add("order");
+
+  return [...chains];
+}
+
+function buildInjectedScenariosForSummary(basecampId, scenarios) {
+  const rows = [];
+  for (const scenario of scenarios) {
+    const meta = scenario.meta || {};
+    const primaryId = meta.id || scenario.dir || "";
+    if (!primaryId) continue;
+    const candidateIds = new Set([primaryId]);
+    if (scenario.dir && scenario.dir !== primaryId) candidateIds.add(scenario.dir);
+    let injected = false;
+    for (const id of candidateIds) {
+      if (readScenarioFaultState(basecampId, id) === "injected") {
+        injected = true;
+        break;
+      }
+    }
+    if (!injected) continue;
+    rows.push({
+      scenario_id: primaryId,
+      title: meta.title || primaryId,
+      business_context: meta.business_context || "",
+      highlight_chains: computeHighlightChainsForScenario(scenario)
+    });
+  }
+  return rows;
+}
+
 function resolveScenarioScriptPath(scenario, scriptName) {
   const relDir = scenario?.dir;
   if (!relDir) return null;
@@ -521,10 +582,19 @@ async function collectMetricsSummary(basecampId, isRunning) {
         read_success_rate: null,
         p99_ms: null
       },
-      collected_at: ts
+      collected_at: ts,
+      injected_scenarios: []
     };
     return placeholder;
   }
+
+  await loadScenarioFaultStateFromDisk();
+  const projectsForInjected = await loadProjects();
+  const projectForInjected = projectsForInjected.find((item) => item.id === basecampId);
+  const scenariosForInjected = projectForInjected
+    ? await getProjectScenariosCached(projectForInjected)
+    : [];
+  const injectedScenarios = buildInjectedScenariosForSummary(basecampId, scenariosForInjected);
 
   const phase = getPhaseByTick(state.tick);
   const point = buildMockMetricsPoint(phase, state.tick);
@@ -581,7 +651,8 @@ async function collectMetricsSummary(basecampId, isRunning) {
       read_success_rate: storage.read_success_rate,
       p99_ms: storage.p99_ms
     },
-    collected_at: ts
+    collected_at: ts,
+    injected_scenarios: injectedScenarios
   };
 }
 
@@ -1429,6 +1500,7 @@ async function requestHandler(req, res) {
         return {
           scenario_id: scenarioId,
           title: meta.title || "",
+          title_reveal: meta.title_reveal || "",
           business_context: meta.business_context || "",
           difficulty: meta.difficulty ?? null,
           duration_min: meta.duration_min ?? null,
@@ -1465,6 +1537,7 @@ async function requestHandler(req, res) {
         scenario: {
           scenario_id: meta.id || scenario.dir || "",
           title: meta.title || "",
+          title_reveal: meta.title_reveal || "",
           business_context: meta.business_context || "",
           difficulty: meta.difficulty ?? null,
           duration_min: meta.duration_min ?? null,

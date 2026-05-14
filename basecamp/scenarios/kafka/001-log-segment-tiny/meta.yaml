@@ -1,0 +1,15 @@
+id: kafka-001
+title: 订单写入后，下游处理一顿一顿，监控上延迟像锯齿
+title_reveal: Broker 日志段过小，生产与消费抖动加剧
+tech: kafka
+difficulty: 3
+duration_min: 25
+duration_max: 45
+resource_level: heavy
+tags:
+  - kafka
+  - broker
+  - log-segment
+parameter_intervention: true
+requires_basecamp: true
+business_context: order

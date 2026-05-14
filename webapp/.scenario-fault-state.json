@@ -1,3 +1,5 @@
 {
-  "basecamp::mysql-001": "injected"
+  "basecamp::mysql-001": "injected",
+  "basecamp::nginx-001": "injected",
+  "basecamp::kafka-002": "injected"
 }

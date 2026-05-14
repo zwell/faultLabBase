@@ -1,0 +1,15 @@
+id: nginx-002
+title: 支付确认页偶发「转圈很久后失败」，经网关时更明显
+title_reveal: 反向代理读超时过短，上游略慢即 504
+tech: nginx
+difficulty: 3
+duration_min: 20
+duration_max: 35
+resource_level: light
+tags:
+  - nginx
+  - proxy-read-timeout
+  - 504
+parameter_intervention: true
+requires_basecamp: true
+business_context: payment

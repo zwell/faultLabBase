@@ -263,7 +263,8 @@ exit 1
 ```yaml
 # 现有字段（保持不变）
 id: mysql-001
-title: 连接池打满，支付回调超时
+title: 大促窗口里，支付回调变慢、订单长时间停在处理中   # 现象标题（封面），勿剧透根因
+title_reveal: 连接池打满，支付回调超时（MySQL 连接上限过低） # 揭题标题：Web 通关后替换主标题；可选
 tech: mysql
 difficulty: 3
 duration_min: 25
@@ -277,6 +278,8 @@ parameter_intervention: true
 requires_basecamp: true       # 依赖底座
 business_context: payment     # 业务链路：order / payment / search / inventory
 ```
+
+**`title` / `title_reveal`**：规范见 `docs/CONTRIBUTING.md` §3.0。verify 提示词只用 `title`，不用 `title_reveal`。
 
 ---
 

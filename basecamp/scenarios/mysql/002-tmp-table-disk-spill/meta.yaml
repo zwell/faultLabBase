@@ -1,0 +1,15 @@
+id: mysql-002
+title: 演练期间下单与列表查询同时变慢，超时变多但错误率不高
+title_reveal: 临时表阈值过小，排序与聚合查询变慢
+tech: mysql
+difficulty: 3
+duration_min: 25
+duration_max: 40
+resource_level: heavy
+tags:
+  - mysql
+  - tmp-table
+  - disk-temp
+parameter_intervention: true
+requires_basecamp: true
+business_context: order

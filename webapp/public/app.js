@@ -14,6 +14,15 @@ function escapeHtml(text) {
     .replaceAll(">", "&gt;");
 }
 
+/** 主标题：未完成用现象 title；已完成且配置了 title_reveal（揭题标题）则切换 */
+function scenarioDisplayTitle(row) {
+  const title = row?.title != null ? String(row.title) : "";
+  const reveal = String(row?.title_reveal || "").trim();
+  const status = row?.analysis_status || "";
+  if (status === "completed" && reveal) return reveal.trim() || title.trim() || "未命名场景";
+  return title.trim() || "未命名场景";
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -51,13 +60,29 @@ function getResourceLevelText(level) {
   return "未知";
 }
 
-function getDifficultyText(difficulty) {
+function getDifficultyParts(difficulty) {
   const value = Number(difficulty);
-  if (!Number.isFinite(value) || value <= 0) return "L? 未知";
-  if (value <= 2) return `L${value} 简单`;
-  if (value === 3) return "L3 中等";
-  if (value === 4) return "L4 困难";
-  return `L${value} 很难`;
+  if (!Number.isFinite(value) || value <= 0) {
+    return { level: 0, label: "未知" };
+  }
+  const lv = Math.min(5, Math.max(1, Math.floor(value)));
+  let label;
+  if (lv <= 2) label = "简单";
+  else if (lv === 3) label = "中等";
+  else if (lv === 4) label = "困难";
+  else label = "很难";
+  return { level: lv, label };
+}
+
+/** 难度色标胶囊（仅输出固定结构 + escapeHtml(label)，供列表/详情安全拼接 HTML） */
+function getDifficultyPillHtml(difficulty) {
+  const p = getDifficultyParts(difficulty);
+  if (p.level === 0) {
+    const t = "难度未标注或无效";
+    return `<span class="difficulty-pill difficulty-unknown" title="${escapeHtml(t)}"><span class="difficulty-pill-lv">L?</span><span class="difficulty-pill-txt">${escapeHtml(p.label)}</span></span>`;
+  }
+  const title = `难度 L${p.level}（${p.label}）`;
+  return `<span class="difficulty-pill difficulty-l${p.level}" title="${escapeHtml(title)}"><span class="difficulty-pill-lv">L${p.level}</span><span class="difficulty-pill-txt">${escapeHtml(p.label)}</span></span>`;
 }
 
 function getBusinessContextText(key) {
@@ -217,6 +242,7 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
       ${
         isRunning
           ? `<section class="panel scenarios-panel">
+        <h2 class="section-title scenarios-panel-title">故障场景</h2>
         <div class="filters">
           <label class="filter">
             <span class="filter-label">难度</span>
@@ -243,7 +269,10 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
 
         <div id="scenario-list" class="scenario-grid">加载中...</div>
       </section>`
-          : `<section class="panel scenarios-panel"><p class="muted">底座未启动成功，场景列表已隐藏。</p></section>`
+          : `<section class="panel scenarios-panel">
+        <h2 class="section-title scenarios-panel-title">故障场景</h2>
+        <p class="muted">底座未启动成功，场景列表已隐藏。</p>
+      </section>`
       }
     </div>
   `);
@@ -317,15 +346,14 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
 
     listEl.innerHTML = filtered
       .map((s) => {
-        const title = s.title || "未命名场景";
         const scenarioId = s.scenario_id || "";
         const ctx = getBusinessContextText(s.business_context);
-        const diff = getDifficultyText(s.difficulty);
         const scenarioKey = `${basecampId}::${scenarioId}`;
         const faultState = (store.getState().faultStateByScenario || {})[scenarioKey] || s.fault_state || "not_injected";
         const injectedTag = faultState === "injected" ? '<span class="scenario-tag injected">已注入</span>' : '<span class="scenario-tag">未注入</span>';
         const analysisState =
           (store.getState().analysisStatusByScenario || {})[scenarioKey] || s.analysis_status || "not_started";
+        const headline = scenarioDisplayTitle({ ...s, analysis_status: analysisState });
         const analysisTags =
           analysisState === "completed"
             ? '<span class="scenario-tag learned">已学习</span><span class="scenario-tag completed">已完成</span>'
@@ -335,10 +363,16 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
         return `
           <article class="scenario-card" data-scenario-id="${escapeHtml(scenarioId)}">
             <div class="scenario-title-row">
-              <strong class="scenario-title">${escapeHtml(title)}</strong>
+              <strong class="scenario-title">${escapeHtml(headline)}</strong>
               <div class="scenario-card-tags">${analysisTags}${injectedTag}</div>
             </div>
-            <div class="scenario-meta">${escapeHtml(`${ctx} · ${diff} · ${durationText}`)}</div>
+            <div class="scenario-meta scenario-meta-line">
+              <span class="scenario-meta-text">${escapeHtml(ctx)}</span>
+              <span class="meta-dot" aria-hidden="true">·</span>
+              ${getDifficultyPillHtml(s.difficulty)}
+              <span class="meta-dot" aria-hidden="true">·</span>
+              <span class="scenario-meta-text">${escapeHtml(durationText)}</span>
+            </div>
           </article>
         `;
       })
@@ -369,7 +403,8 @@ function renderScenarioDetailPage(basecampId, scenario) {
     scenarioListUnsubscribe();
     scenarioListUnsubscribe = null;
   }
-  const title = scenario?.title || "未命名场景";
+  const phenomenonTitle = scenario?.title || "未命名场景";
+  const revealTitle = String(scenario?.title_reveal || "").trim();
   const brief = String(scenario?.scenario_brief || "");
   const guide = String(scenario?.troubleshooting_guide || "");
   const messages = [];
@@ -419,7 +454,6 @@ function renderScenarioDetailPage(basecampId, scenario) {
     scenario?.duration_min && scenario?.duration_max
       ? `${scenario.duration_min}–${scenario.duration_max} 分钟`
       : "时长未知";
-  const difficultyText = getDifficultyText(scenario?.difficulty);
   const contextText = getBusinessContextText(scenario?.business_context);
 
   mountApp(`
@@ -430,7 +464,10 @@ function renderScenarioDetailPage(basecampId, scenario) {
       <div id="business-status-slot"></div>
       <section class="panel scenario-detail-panel">
         <div class="scenario-head-row">
-          <h2>${escapeHtml(title)}</h2>
+          <div class="scenario-head-text">
+            <h2 id="scenario-detail-title">${escapeHtml(scenarioDisplayTitle(scenario))}</h2>
+            <p id="scenario-detail-title-sub" class="muted scenario-title-sub" hidden></p>
+          </div>
           <div class="scenario-head-actions">
             <span id="scenario-analysis-tags" class="scenario-analysis-tags"></span>
             <span id="scenario-inject-tag" class="scenario-tag">未注入</span>
@@ -444,7 +481,13 @@ function renderScenarioDetailPage(basecampId, scenario) {
         <div class="scenario-detail-content">
           <div class="scenario-detail-block">
             <div class="info-label">关注信息</div>
-            <div class="info-value">${escapeHtml(`${contextText} · ${difficultyText} · ${durationText}`)}</div>
+            <div class="info-value info-value-row">
+              <span>${escapeHtml(contextText)}</span>
+              <span class="meta-dot" aria-hidden="true">·</span>
+              ${getDifficultyPillHtml(scenario?.difficulty)}
+              <span class="meta-dot" aria-hidden="true">·</span>
+              <span>${escapeHtml(durationText)}</span>
+            </div>
             <pre class="detail-pre">${escapeHtml(focusBrief)}</pre>
           </div>
           <div class="scenario-detail-block">
@@ -480,6 +523,26 @@ function renderScenarioDetailPage(basecampId, scenario) {
   const statusSlot = document.getElementById("business-status-slot");
   const shellSlot = document.getElementById("shell-module-slot");
   const store = window.FaultLabStore;
+  function renderDetailHeadline() {
+    const h2 = document.getElementById("scenario-detail-title");
+    const sub = document.getElementById("scenario-detail-title-sub");
+    if (!h2) return;
+    const st =
+      (store.getState().analysisStatusByScenario || {})[scenarioStateKey] ||
+      scenario?.analysis_status ||
+      "not_started";
+    const row = { ...scenario, analysis_status: st };
+    h2.textContent = scenarioDisplayTitle(row);
+    if (sub) {
+      if (st === "completed" && revealTitle) {
+        sub.textContent = `演练现象：${phenomenonTitle}`;
+        sub.hidden = false;
+      } else {
+        sub.textContent = "";
+        sub.hidden = true;
+      }
+    }
+  }
   const isRunningForBasecamp = () => {
     const item = cachedBasecampDetails.get(basecampId) || cachedBasecamps.find((v) => v.id === basecampId);
     return item?.status === "running";
@@ -607,6 +670,7 @@ function renderScenarioDetailPage(basecampId, scenario) {
     }
   }
   renderAnalysisTags();
+  renderDetailHeadline();
 
   const messagesEl = document.getElementById("llm-messages");
   const inputEl = document.getElementById("llm-input");
@@ -678,6 +742,7 @@ function renderScenarioDetailPage(basecampId, scenario) {
           if (prev) cachedScenarioDetails.set(ck, { ...prev, analysis_status: "completed" });
         }
         renderAnalysisTags();
+        renderDetailHeadline();
       }
       if (evt.type === "error") {
         messages[assistantIdx].text = `请求失败：${evt.message || evt.code || "error"}`;
@@ -757,6 +822,7 @@ function renderScenarioDetailPage(basecampId, scenario) {
   scenarioListUnsubscribe = store.subscribe(() => {
     renderInjectState();
     renderAnalysisTags();
+    renderDetailHeadline();
   });
 }
 

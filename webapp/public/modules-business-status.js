@@ -1,4 +1,12 @@
 (function () {
+  function escapeHtml(text) {
+    return String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
   const THRESHOLDS = {
     order_success_rate: { warn: 0.95, critical: 0.85 },
     order_p99_ms: { warn: 500, critical: 2000 },
@@ -81,6 +89,7 @@
           <h2 class="section-title">业务状态</h2>
           <span class="muted" data-refresh-status>最后更新时间：--:--:--</span>
         </div>
+        <div class="business-injected-strip" data-injected-strip hidden></div>
         <div class="business-cards" data-cards></div>
         <div class="business-detail" data-detail></div>
       </section>
@@ -96,6 +105,23 @@
     const previousValues = new Map();
 
     function drawCards() {
+      const injected = Array.isArray(summary?.injected_scenarios) ? summary.injected_scenarios : [];
+      const stripEl = containerEl.querySelector("[data-injected-strip]");
+      if (stripEl) {
+        if (!injected.length) {
+          stripEl.innerHTML = "";
+          stripEl.setAttribute("hidden", "");
+        } else {
+          stripEl.removeAttribute("hidden");
+          stripEl.innerHTML = `<div class="business-injected-chips">${injected
+            .map((row) => {
+              const label = String(row.title || row.scenario_id || "").trim() || row.scenario_id;
+              return `<span class="injected-chip" title="${escapeHtml(row.scenario_id || "")}">${escapeHtml(label)}</span>`;
+            })
+            .join("")}</div>`;
+        }
+      }
+
       const order = summary?.order || {};
       const consumer = summary?.consumer || {};
       const storage = summary?.storage || {};
@@ -142,8 +168,17 @@
       cardsEl.innerHTML = chains
         .map((chain) => {
           const active = expanded === chain.key ? "active" : "";
+          const injectForChain = injected.filter(
+            (row) => Array.isArray(row.highlight_chains) && row.highlight_chains.includes(chain.key)
+          );
+          const injectClass = injectForChain.length ? " business-card-injected" : "";
+          const hintTitles = injectForChain.map((r) => r.title || r.scenario_id).filter(Boolean);
+          const injectHint =
+            hintTitles.length > 0
+              ? `<div class="business-card-inject-hint muted">${escapeHtml(`演练注入：${hintTitles.join("、")}`)}</div>`
+              : "";
           return `
-            <article class="business-card ${chain.statusClass} ${active}" data-chain="${chain.key}">
+            <article class="business-card ${chain.statusClass} ${active}${injectClass}" data-chain="${chain.key}">
               <strong class="business-card-title">${chain.name}</strong>
               <div class="business-card-metrics">
                 ${chain.metrics
@@ -156,6 +191,7 @@
                   })
                   .join("")}
               </div>
+              ${injectHint}
             </article>
           `;
         })

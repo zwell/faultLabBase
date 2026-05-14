@@ -1,0 +1,15 @@
+id: redis-001
+title: 商品详情读接口 P99 抬升，数据库读压力跟着上来
+title_reveal: 缓存容量过小，热点键频繁淘汰
+tech: redis
+difficulty: 2
+duration_min: 20
+duration_max: 35
+resource_level: light
+tags:
+  - redis
+  - eviction
+  - cache-miss
+parameter_intervention: true
+requires_basecamp: true
+business_context: search

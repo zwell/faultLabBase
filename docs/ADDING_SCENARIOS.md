@@ -23,7 +23,7 @@ basecamp/scenarios/<tech>/<场景目录名>/
 
 | 文件 | 说明 |
 |------|------|
-| `meta.yaml` | 场景元数据（id、标题、难度、`resource_level` 等），供索引与 Web |
+| `meta.yaml` | 场景元数据（`id`、`title` / `title_reveal`、难度、`resource_level` 等），供索引与 Web |
 | `inject.sh` | 注入故障，须符合仓库内 `inject.sh` 约定（摘要格式、底座检查等） |
 | `README.md` | 学习者面向的排查入口，按模板写 |
 | `SOLUTION.md` | 供 verify 对照的要点，按模板写 |

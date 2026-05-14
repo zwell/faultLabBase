@@ -111,14 +111,34 @@ json_escape() {
 }
 
 compose_file() {
+  BASECAMP_SHARED_COMPOSE=0
   COMPOSE_FILE="$SCENARIO_DIR/docker-compose.yml"
-  if [ ! -f "$COMPOSE_FILE" ]; then
-    echo "ERROR: docker-compose.yml not found in $SCENARIO_DIR"
-    exit 1
+  if [ -f "$COMPOSE_FILE" ]; then
+    return
   fi
+
+  META_FILE="$SCENARIO_DIR/meta.yaml"
+  if [ -f "$META_FILE" ] && grep -Eq '^requires_basecamp:[[:space:]]*true([[:space:]]|$)' "$META_FILE"; then
+    SHARED_COMPOSE="$FAULTLAB_ROOT/$FAULTLAB_PROJECT/docker-compose.yml"
+    if [ -f "$SHARED_COMPOSE" ]; then
+      COMPOSE_FILE="$SHARED_COMPOSE"
+      BASECAMP_SHARED_COMPOSE=1
+      return
+    fi
+  fi
+
+  echo "ERROR: docker-compose.yml not found in $SCENARIO_DIR"
+  echo "Hint: Basecamp scenarios can set requires_basecamp: true in meta.yaml to use $FAULTLAB_PROJECT/docker-compose.yml"
+  exit 1
 }
 
 compose_project_name() {
+  if [ "${BASECAMP_SHARED_COMPOSE:-0}" = "1" ]; then
+    # Must match the default project name for `docker compose -f basecamp/docker-compose.yml`
+    # because services use fixed `container_name: basecamp-*` (only one project can own them).
+    COMPOSE_PROJECT="basecamp"
+    return
+  fi
   SCENARIO_BASENAME=$(basename "$SCENARIO_DIR")
   COMPOSE_PROJECT="faultlab-${SCENARIO_BASENAME}"
 }
@@ -273,8 +293,32 @@ cmd_verify() {
     exit 1
   fi
 
-  provider=$(printf "%s" "${VERIFY_PROVIDER:-qwen}" | awk '{gsub(/\r/,""); gsub(/^[ \t]+|[ \t]+$/,""); print}')
-  model=$(printf "%s" "${VERIFY_MODEL:-qwen-plus}" | awk '{gsub(/\r/,""); gsub(/^[ \t]+|[ \t]+$/,""); print}')
+  provider_raw=$(printf "%s" "${VERIFY_PROVIDER:-}" | awk '{gsub(/\r/,""); gsub(/^[ \t]+|[ \t]+$/,""); print}')
+  if [ -z "$provider_raw" ]; then
+    if [ -n "${DASHSCOPE_API_KEY:-}" ]; then
+      provider="qwen"
+    elif [ -n "${DEEPSEEK_API_KEY:-}" ]; then
+      provider="deepseek"
+    elif [ -n "${OPENAI_API_KEY:-}" ]; then
+      provider="openai"
+    else
+      provider="qwen"
+    fi
+  else
+    provider="$provider_raw"
+  fi
+
+  model_raw=$(printf "%s" "${VERIFY_MODEL:-}" | awk '{gsub(/\r/,""); gsub(/^[ \t]+|[ \t]+$/,""); print}')
+  if [ -n "$model_raw" ]; then
+    model="$model_raw"
+  else
+    case "$provider" in
+      openai) model="gpt-4o-mini" ;;
+      deepseek) model="deepseek-chat" ;;
+      *) model="qwen-plus" ;;
+    esac
+  fi
+
   case "$provider" in
     qwen)
       api_url="${VERIFY_API_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}"
@@ -284,29 +328,32 @@ cmd_verify() {
       api_url="${VERIFY_API_URL:-https://api.openai.com/v1/chat/completions}"
       api_key="${VERIFY_API_KEY:-${OPENAI_API_KEY:-}}"
       ;;
+    deepseek)
+      api_url="${VERIFY_API_URL:-https://api.deepseek.com/v1/chat/completions}"
+      api_key="${VERIFY_API_KEY:-${DEEPSEEK_API_KEY:-}}"
+      ;;
     *)
-      api_url="${VERIFY_API_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}"
-      api_key="${VERIFY_API_KEY:-${DASHSCOPE_API_KEY:-}}"
-      provider="qwen"
+      echo "ERROR: unknown VERIFY_PROVIDER: $provider"
+      echo "Use VERIFY_PROVIDER=qwen|deepseek|openai (or omit it to auto-pick from env keys)."
+      exit 1
       ;;
   esac
 
   if [ "$api_url" = "" ]; then
     echo "ERROR: verify API url is empty."
-    echo "Set VERIFY_API_URL or use VERIFY_PROVIDER=qwen/openai."
+    echo "Set VERIFY_API_URL or use VERIFY_PROVIDER=qwen/deepseek/openai."
     exit 1
   fi
 
   if [ "$api_key" = "" ]; then
     echo "ERROR: verify API key is empty."
-    echo "For qwen, set DASHSCOPE_API_KEY (or VERIFY_API_KEY)."
-    echo "For openai, set OPENAI_API_KEY (or VERIFY_API_KEY)."
+    echo "Set one of: DASHSCOPE_API_KEY, DEEPSEEK_API_KEY, OPENAI_API_KEY (or VERIFY_API_KEY)."
     exit 1
   fi
 
   if [ "$model" = "" ]; then
     echo "ERROR: verify model is empty."
-    echo "Set VERIFY_MODEL, for example: qwen-plus / qwen-turbo."
+    echo "Set VERIFY_MODEL (defaults: qwen-plus / deepseek-chat / gpt-4o-mini by provider)."
     exit 1
   fi
 
@@ -349,7 +396,7 @@ cmd_verify() {
     awk '{print}' "$response_file"
     if awk '/model_not_found|Model not exist/ {found=1} END{exit found?0:1}' "$response_file" >/dev/null 2>&1; then
       echo "Hint: current VERIFY_MODEL may be invalid for this provider."
-      echo "Try VERIFY_MODEL=qwen-plus (or qwen-turbo) in .env."
+      echo "Try VERIFY_MODEL=deepseek-chat (deepseek), qwen-plus (qwen), or gpt-4o-mini (openai) in .env."
     fi
     rm -f "$response_file"
     exit 1

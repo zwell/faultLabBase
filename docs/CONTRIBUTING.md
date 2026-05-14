@@ -104,7 +104,8 @@ faultlab/
 
 ```yaml
 id: kafka-001                          # 与目录名一致，格式 {tech}-{NNN}
-title: Kafka 消费者 Rebalance 风暴      # 简短标题，用于前端列表
+title: 凌晨演练：订单写入后下游处理一顿一顿   # 现象标题（封面）：列表 + 未完成详情的主标题
+title_reveal: Broker 日志段过小…      # 揭题标题（可选）：Web 判定「已完成」后替换主标题，见下文
 tech: kafka                            # 技术栈，小写
 difficulty: 2                          # 1–5，1 最简单
 duration_min: 30                       # 预计最短完成时间（分钟）
@@ -116,6 +117,19 @@ tags:                                  # 关键词，用于前端筛选
   - lag
 parameter_intervention: false          # 是否人为修改了关键中间件参数
 ```
+
+#### 标题：`title` 与 `title_reveal`（揭题标题）
+
+为避免「列表/详情一眼看穿根因」，标题拆成两层语义（字段名 **`title_reveal`** 固定，勿改名）：
+
+| 字段 | 中文称呼 | 展示时机 | 写法要求 |
+|------|----------|----------|----------|
+| `title` | **现象标题**（封面） | 学习者**未完成**该场景时：场景列表、详情页主标题 | 只写**业务现象与体感**（时间、链路、指标体感），避免直接写出可锁定根因的技术结论或参数名。 |
+| `title_reveal` | **揭题标题** | 学习者在 Web 端被判定**已完成**（`analysis_status === completed`）后：列表与详情**主标题**切换为此字段 | 可写复盘向、技术向的「具体结论式」标题；**可选**，不填则通关后主标题仍为 `title`。 |
+
+**与 verify 的关系**：服务器端判题/流式分析构造提示词时，**只使用 `title`（现象标题）** 作为场景标题喂给模型，**不得**把 `title_reveal` 并入系统提示，避免未通关即剧透。
+
+**与 README 的关系**：`README.md` 顶部可与 `title` 对齐（现象向）；`title_reveal` 不必出现在 README 中（避免未通关即从文档侧剧透）。
 
 ### 3.1 `docker-compose.yml`
 
@@ -225,6 +239,7 @@ scenario       : <scenario-id>
 提交前逐项确认：
 
 - [ ] `meta.yaml`：所有字段填写完整，`resource_level` 与实际内存占用吻合
+- [ ] `meta.yaml`：`title` 为现象标题（封面），不剧透根因；若需通关后换主标题则填写 `title_reveal`（揭题标题）
 - [ ] `meta.yaml`：`parameter_intervention` 字段与实际情况一致
 - [ ] `docker-compose.yml`：`up -d` 可正常拉起，健康检查通过
 - [ ] `docker-compose.yml`：容器内 shell 变量已写成 `$$VAR`
