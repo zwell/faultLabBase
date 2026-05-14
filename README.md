@@ -10,9 +10,9 @@
 
 ![首页 — 选择底座](statics/index.png)
 
-![底座监控 & 故障注入](statics/base.png)
+![底座详情 & 故障列表](statics/base.png)
 
-![故障场景列表](statics/scenario.png)
+![故障详情](statics/scenario.png)
 
 ---
 
