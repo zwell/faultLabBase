@@ -1,60 +1,27 @@
 # FaultLab
 
-训练的是真实故障排查能力，不是背答案。
+本地优先的故障排查演练：在可运行环境里注入故障、采集证据，用 CLI 或 Web 完成演练。
 
-FaultLab 是一个本地优先的故障诊断训练项目。你可以在可运行的服务环境中注入中间件故障、采集证据，并通过统一 CLI 流程提交诊断结论。
+## 环境要求
 
-## 为什么是 FaultLab
+- **Docker**：需已安装并可使用 `docker` 与 `docker compose`（演练底座与场景依赖容器）。
+- **Shell**：仓库内脚本为 `sh` 兼容写法；在 macOS / Linux / Git Bash（Windows）下使用 CLI 与脚本即可。
+- **Node.js**（可选）：仅在使用 **Web 面板**（`webapp/`）时需要；纯 CLI 演练可不装。
 
-- **真实**：场景绑定到可运行服务，而不是静态题面。
-- **实战**：每次演练都遵循统一闭环：启动、注入、观察、验证、清理。
-- **可扩展**：按项目组织场景目录，支持批量生成和并行迭代。
-- **AI 辅助**：验证流程可按结构化 rubric 评估根因分析质量。
+内存建议随场景而定；含 Kafka 等组件的底座偏重，见 `basecamp/README.md` 与各场景 `meta.yaml` 中的 `resource_level`。
 
-## 你可以获得什么
-
-- 统一 CLI：`./cli/faultlab.sh`
-- 贡献规范与模板：`docs/`
-- 默认可运行项目：`basecamp/`
-  - 基线技术栈（MySQL / Redis / Kafka / API / Consumer / Nginx / Loader）
-  - 项目内场景目录：`basecamp/scenarios/`
-
-## 快速开始
-
-在仓库根目录执行：
+## Web 面板（可选）
 
 ```sh
-export FAULTLAB_PROJECT=basecamp
-export FAULTLAB_SCENARIO=basecamp/scenarios/<tech>/<id>
-
-./cli/faultlab.sh start
-./cli/faultlab.sh inject
-./cli/faultlab.sh verify
-./cli/faultlab.sh clean
+cd webapp && npm install && npm start
 ```
 
-`FAULTLAB_SCENARIO` 也支持 `scenarios/<tech>/<id>` 或 `<tech>/<id>` 形式；CLI 会优先结合 `FAULTLAB_PROJECT` 解析路径。
+浏览器访问：**http://localhost:4173**（端口等见 `webapp/README.md`）。底座启动、停止等可在 Web 内完成；纯 CLI 演练见下方文档。
 
-## 仅启动 Basecamp
+## 文档
 
-```sh
-docker compose -f basecamp/docker-compose.yml up -d
-```
-
-## 仓库结构
-
-- `cli/`：命令入口
-- `docs/`：使用说明、贡献规范与模板
-- `basecamp/`：默认项目模块
-
-## 文档索引
-
-- CLI 使用说明：`docs/CLI_USAGE.md`
-- 贡献规范：`docs/CONTRIBUTING.md`
-- Basecamp 模块规范：`basecamp/README.md`
-
-## 路线方向
-
-- 扩展 `basecamp` 之外的项目模块
-- 增加更多业务化场景，并保持一致的评分标准
-- 提升 verify 评估质量与反馈深度
+| 用途 | 文档 |
+|------|------|
+| CLI 命令与变量 | [`docs/CLI_USAGE.md`](docs/CLI_USAGE.md) |
+| 新增场景 | [`docs/ADDING_SCENARIOS.md`](docs/ADDING_SCENARIOS.md)（规范见 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md)） |
+| Basecamp 说明 | [`basecamp/README.md`](basecamp/README.md) |
