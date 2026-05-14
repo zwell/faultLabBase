@@ -1,4 +1,5 @@
 const http = require("http");
+const fsSync = require("fs");
 const fs = require("fs/promises");
 const path = require("path");
 const { exec, spawn } = require("child_process");
@@ -11,6 +12,38 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const PROJECT_FILE = path.join(REPO_ROOT, "project.yaml");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const SCENARIO_STATE_FILE = path.join(__dirname, ".scenario-fault-state.json");
+const SCENARIO_ANALYSIS_FILE = path.join(__dirname, ".scenario-analysis-state.json");
+
+function loadDotEnvFileSync(filePath) {
+  try {
+    if (!fsSync.existsSync(filePath)) return;
+    const raw = fsSync.readFileSync(filePath, "utf8");
+    for (let line of raw.split("\n")) {
+      line = line.replace(/\r$/, "");
+      if (!line || /^\s*#/.test(line)) continue;
+      const eq = line.indexOf("=");
+      if (eq <= 0) continue;
+      let key = line.slice(0, eq).trim();
+      if (/^export\s+/i.test(key)) key = key.replace(/^export\s+/i, "").trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+      let val = line.slice(eq + 1).trim();
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1).replace(/\\n/g, "\n");
+      }
+      if (process.env[key] === undefined) {
+        process.env[key] = val;
+      }
+    }
+  } catch {
+    // ignore unreadable .env
+  }
+}
+
+loadDotEnvFileSync(path.join(REPO_ROOT, ".env"));
+loadDotEnvFileSync(path.join(__dirname, ".env"));
 
 async function readYamlFile(filePath) {
   const raw = await fs.readFile(filePath, "utf8");
@@ -810,6 +843,286 @@ async function clearScenarioFaultStateForBasecamp(basecampId) {
   if (changed) await persistScenarioFaultStateToDisk();
 }
 
+const scenarioAnalysisState = new Map(); // key -> { status: "completed", updated_at: string }
+let scenarioAnalysisLoaded = false;
+
+async function loadScenarioAnalysisStateFromDisk() {
+  if (scenarioAnalysisLoaded) return;
+  try {
+    const raw = await fs.readFile(SCENARIO_ANALYSIS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (value && typeof value === "object" && value.status === "completed") {
+          scenarioAnalysisState.set(key, {
+            status: "completed",
+            updated_at: typeof value.updated_at === "string" ? value.updated_at : new Date().toISOString()
+          });
+        }
+      }
+    }
+  } catch {
+    // ignore missing/invalid file
+  } finally {
+    scenarioAnalysisLoaded = true;
+  }
+}
+
+async function persistScenarioAnalysisStateToDisk() {
+  const out = {};
+  for (const [key, value] of scenarioAnalysisState.entries()) out[key] = value;
+  const temp = `${SCENARIO_ANALYSIS_FILE}.tmp`;
+  await fs.writeFile(temp, JSON.stringify(out, null, 2), "utf8");
+  await fs.rename(temp, SCENARIO_ANALYSIS_FILE);
+}
+
+function readScenarioAnalysisStatus(basecampId, scenarioId) {
+  const key = getScenarioStateKey(basecampId, scenarioId);
+  const row = scenarioAnalysisState.get(key);
+  if (row && row.status === "completed") return "completed";
+  return "not_started";
+}
+
+async function writeScenarioAnalysisCompleted(basecampId, scenarioId) {
+  const key = getScenarioStateKey(basecampId, scenarioId);
+  scenarioAnalysisState.set(key, {
+    status: "completed",
+    updated_at: new Date().toISOString()
+  });
+  await persistScenarioAnalysisStateToDisk();
+}
+
+function isLlmConfigured() {
+  const provider = String(process.env.LLM_PROVIDER || "deepseek").toLowerCase();
+  if (provider === "openai") {
+    return !!(process.env.OPENAI_API_KEY || process.env.LLM_API_KEY);
+  }
+  return !!(process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY);
+}
+
+function getLlmRuntime() {
+  const providerRaw = String(process.env.LLM_PROVIDER || "deepseek").toLowerCase();
+  const provider = providerRaw === "openai" ? "openai" : "deepseek";
+  const apiBase = String(
+    process.env.LLM_API_BASE ||
+      (provider === "openai" ? "https://api.openai.com/v1" : "https://api.deepseek.com/v1")
+  ).replace(/\/$/, "");
+  const apiKey =
+    provider === "openai"
+      ? process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || ""
+      : process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY || "";
+  const model =
+    process.env.LLM_MODEL || (provider === "openai" ? "gpt-4o-mini" : "deepseek-chat");
+  return { provider, apiBase, apiKey, model };
+}
+
+async function readSolutionMarkdown(scenario) {
+  const relDir = scenario?.dir;
+  if (!relDir) return "";
+  const abs = path.join(REPO_ROOT, relDir, "SOLUTION.md");
+  if (!(await pathExists(abs))) return "";
+  const text = await fs.readFile(abs, "utf8");
+  const max = 20000;
+  return text.length > max ? `${text.slice(0, max)}\n\n…（内容过长已截断用于判定）` : text;
+}
+
+function parseJsonFromModelContent(raw) {
+  let text = String(raw || "").trim();
+  if (!text) return null;
+  if (text.startsWith("```")) {
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/s, "");
+  }
+  try {
+    return JSON.parse(text.trim());
+  } catch {
+    return null;
+  }
+}
+
+const FAULTLAB_JSON_MARK = "<<<FAULTLAB_JSON>>>";
+
+function trailingPartialMarkerLen(text, marker) {
+  const max = Math.min(marker.length - 1, text.length);
+  for (let len = max; len >= 1; len -= 1) {
+    const suf = text.slice(-len);
+    if (marker.startsWith(suf)) return len;
+  }
+  return 0;
+}
+
+function visibleStreamPrefix(fullText, marker) {
+  const idx = fullText.indexOf(marker);
+  if (idx >= 0) return fullText.slice(0, idx);
+  const strip = trailingPartialMarkerLen(fullText, marker);
+  return fullText.slice(0, fullText.length - strip);
+}
+
+function extractVerdictFromTail(text) {
+  const tail = text.trim().slice(-1200);
+  const parsed = parseJsonFromModelContent(tail);
+  if (parsed?.verdict) return String(parsed.verdict).toLowerCase();
+  const m = tail.match(/"verdict"\s*:\s*"([^"]+)"/i);
+  if (m) return m[1].toLowerCase();
+  return null;
+}
+
+function buildVerifySystemPrompt(scenarioTitle, scenarioBrief, referenceAnswer) {
+  return [
+    "你是 FaultLab 故障演练的导师（mentor），不是苛刻考官。",
+    "你会收到「参考答案」仅供你在内心比对学习者表述；不要在回复中原样照抄参考答案的大段文字。",
+    "输出分为两段：",
+    "1）先写一段或多段给学习者看的正文（中文，可使用 markdown）。语气专业、简洁。",
+    "   - 若对方的根因判断与参考答案一致或等价：在正文中清晰总结根因、证据与验证方式；最后可给一两句延伸阅读。",
+    "   - 若对方部分正确：正文根据匹配度给出下一步排查或思考提示，不要直接给出与参考答案等价的最终根因措辞，不要一次把所有线索说完。",
+    "   - 若对方明显偏离：正文指出应优先核实的数据或链路方向，不给标准答案式结论。",
+    "2）正文结束后，单独起一行，**仅写**以下标记（不要前后空格）：",
+    FAULTLAB_JSON_MARK,
+    "下一行只输出紧凑 JSON（不要 markdown 围栏），形式：{\"verdict\":\"correct\"|\"partial\"|\"wrong\"}",
+    "verdict：correct=与参考答案等价；partial=部分命中；wrong=偏离。",
+    "",
+    `场景标题：${scenarioTitle || "（无）"}`,
+    "",
+    "### 业务剧本节选（供语境）",
+    String(scenarioBrief || "").slice(0, 4000) || "（无）",
+    "",
+    "### 参考答案（内部材料，勿泄露式照抄）",
+    referenceAnswer ||
+      "（本场景未提供 SOLUTION.md：请仅根据剧本节选做一般性演练点评与追问；除非对方在通用排障方法论上已非常严谨，否则 verdict 不要给 correct。）"
+  ].join("\n");
+}
+
+function buildVerifyApiMessages({ scenarioTitle, scenarioBrief, referenceAnswer, learnerMessage, history }) {
+  const system = buildVerifySystemPrompt(scenarioTitle, scenarioBrief, referenceAnswer);
+  const hist = Array.isArray(history) ? history.slice(-12) : [];
+  const apiMessages = [{ role: "system", content: system }];
+  for (const h of hist) {
+    const role = h.role === "assistant" ? "assistant" : "user";
+    const c = h.content != null ? String(h.content).trim() : "";
+    if (c) apiMessages.push({ role, content: c });
+  }
+  apiMessages.push({ role: "user", content: String(learnerMessage || "").trim() });
+  return apiMessages;
+}
+
+async function collectChatCompletionStream(responseBody, onDelta) {
+  const reader = responseBody.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let carry = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    carry += decoder.decode(value, { stream: true });
+    let split;
+    while ((split = carry.indexOf("\n\n")) !== -1) {
+      const block = carry.slice(0, split);
+      carry = carry.slice(split + 2);
+      for (const line of block.split("\n")) {
+        const t = line.trim();
+        if (!t.startsWith("data:")) continue;
+        const data = t.slice(5).trim();
+        if (data === "[DONE]") continue;
+        let j;
+        try {
+          j = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        const piece = j?.choices?.[0]?.delta?.content;
+        if (typeof piece === "string" && piece.length) {
+          if (onDelta) onDelta(piece);
+        }
+      }
+    }
+  }
+  for (const line of carry.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("data:")) continue;
+    const data = t.slice(5).trim();
+    if (data === "[DONE]") continue;
+    let j;
+    try {
+      j = JSON.parse(data);
+    } catch {
+      continue;
+    }
+    const piece = j?.choices?.[0]?.delta?.content;
+    if (typeof piece === "string" && piece.length && onDelta) onDelta(piece);
+  }
+}
+
+async function runVerifyStreamToClient(res, apiMessages, signal) {
+  const cfg = getLlmRuntime();
+  if (!cfg.apiKey) {
+    const err = new Error("llm_not_configured");
+    err.code = "llm_not_configured";
+    throw err;
+  }
+  const url = `${cfg.apiBase}/chat/completions`;
+  const resUp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${cfg.apiKey}`,
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify({
+      model: cfg.model,
+      messages: apiMessages,
+      temperature: 0.25,
+      stream: true
+    }),
+    signal
+  });
+  if (!resUp.ok) {
+    const t = await resUp.text();
+    const err = new Error("llm_upstream");
+    err.code = "llm_upstream";
+    err.detail = t.slice(0, 800);
+    throw err;
+  }
+  if (!resUp.body) {
+    const err = new Error("llm_no_body");
+    err.code = "llm_upstream";
+    throw err;
+  }
+
+  let fullText = "";
+  let sentVisibleLen = 0;
+
+  function flushToClient() {
+    const vis = visibleStreamPrefix(fullText, FAULTLAB_JSON_MARK);
+    if (vis.length > sentVisibleLen) {
+      const piece = vis.slice(sentVisibleLen);
+      sentVisibleLen = vis.length;
+      if (piece) {
+        res.write(`data: ${JSON.stringify({ type: "token", text: piece })}\n\n`);
+      }
+    }
+  }
+
+  await collectChatCompletionStream(resUp.body, (delta) => {
+    fullText += delta;
+    flushToClient();
+  });
+  flushToClient();
+
+  let reply = "";
+  let verdict = "partial";
+  const idx = fullText.indexOf(FAULTLAB_JSON_MARK);
+  if (idx >= 0) {
+    reply = fullText.slice(0, idx).trim();
+    const tail = fullText.slice(idx + FAULTLAB_JSON_MARK.length).trim();
+    const pj = parseJsonFromModelContent(tail);
+    if (pj?.verdict) verdict = String(pj.verdict).toLowerCase();
+  } else {
+    reply = visibleStreamPrefix(fullText, FAULTLAB_JSON_MARK).trim();
+    const v2 = extractVerdictFromTail(fullText);
+    if (v2) verdict = v2;
+  }
+  if (!["correct", "partial", "wrong"].includes(verdict)) verdict = "partial";
+  if (!reply) reply = "（未生成可见正文，请重试。）";
+  return { verdict, reply };
+}
+
 function spawnShellStreaming(cmd, { cwd, timeoutMs, onChunk }) {
   return new Promise((resolve, reject) => {
     const child = spawn("sh", ["-lc", cmd], {
@@ -952,7 +1265,7 @@ async function requestHandler(req, res) {
     const pathname = requestUrl.pathname;
 
     if (req.method === "GET" && pathname === "/api/health") {
-      sendJson(res, 200, { status: "ok" });
+      sendJson(res, 200, { status: "ok", llm_ready: isLlmConfigured() });
       return;
     }
 
@@ -965,7 +1278,8 @@ async function requestHandler(req, res) {
       sendJson(res, 200, {
         showScenarioInjectUi,
         enableScenarioInjection: showScenarioInjectUi,
-        autoInjectOnPage
+        autoInjectOnPage,
+        llmReady: isLlmConfigured()
       });
       return;
     }
@@ -1119,7 +1433,8 @@ async function requestHandler(req, res) {
           difficulty: meta.difficulty ?? null,
           duration_min: meta.duration_min ?? null,
           duration_max: meta.duration_max ?? null,
-          fault_state: readScenarioFaultState(basecampId, scenarioId)
+          fault_state: readScenarioFaultState(basecampId, scenarioId),
+          analysis_status: readScenarioAnalysisStatus(basecampId, scenarioId)
         };
       });
       sendJson(res, 200, { basecamp_id: basecampId, scenarios: list });
@@ -1156,9 +1471,149 @@ async function requestHandler(req, res) {
           duration_max: meta.duration_max ?? null,
           scenario_brief: scenario.scenario_brief || "",
           troubleshooting_guide: scenario.troubleshooting_guide || "",
-          fault_state: readScenarioFaultState(basecampId, meta.id || scenario.dir || "")
+          fault_state: readScenarioFaultState(basecampId, meta.id || scenario.dir || ""),
+          analysis_status: readScenarioAnalysisStatus(basecampId, meta.id || scenario.dir || "")
         }
       });
+      return;
+    }
+
+    const basecampScenarioVerifyMatch = pathname.match(/^\/api\/basecamps\/([^/]+)\/scenarios\/([^/]+)\/verify$/);
+    if (req.method === "POST" && basecampScenarioVerifyMatch) {
+      if (!isLlmConfigured()) {
+        sendJson(res, 503, {
+          error: "llm_not_configured",
+          message: "未配置 LLM。请设置 DEEPSEEK_API_KEY（默认）或 LLM_API_KEY，或将 LLM_PROVIDER=openai 并设置 OPENAI_API_KEY。"
+        });
+        return;
+      }
+      const basecampId = decodeURIComponent(basecampScenarioVerifyMatch[1]);
+      const scenarioId = decodeURIComponent(basecampScenarioVerifyMatch[2]);
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        sendJson(res, 400, { error: "invalid json" });
+        return;
+      }
+      const message = body?.message != null ? String(body.message).trim() : "";
+      if (!message) {
+        sendJson(res, 400, { error: "message required" });
+        return;
+      }
+      if (message.length > 12000) {
+        sendJson(res, 400, { error: "message too long" });
+        return;
+      }
+      const historyRaw = body?.history;
+      const history = [];
+      if (Array.isArray(historyRaw)) {
+        for (const row of historyRaw.slice(-12)) {
+          if (!row || typeof row !== "object") continue;
+          const role = row.role === "assistant" ? "assistant" : "user";
+          const content = row.content != null ? String(row.content).trim() : "";
+          if (content) history.push({ role, content });
+        }
+      }
+      const projects = await loadProjects();
+      const project = projects.find((item) => item.id === basecampId);
+      if (!project) {
+        sendJson(res, 404, { error: "basecamp not found" });
+        return;
+      }
+      const scenarios = await loadProjectScenarios(project);
+      const scenario = scenarios.find((item) => {
+        const metaId = item?.meta?.id || "";
+        return metaId === scenarioId || item.dir === scenarioId;
+      });
+      if (!scenario) {
+        sendJson(res, 404, { error: "scenario not found" });
+        return;
+      }
+      const meta = scenario.meta || {};
+      const title = meta.title || "";
+      const brief = scenario.scenario_brief || "";
+      let referenceAnswer = "";
+      try {
+        referenceAnswer = await readSolutionMarkdown(scenario);
+      } catch {
+        referenceAnswer = "";
+      }
+      const apiMessages = buildVerifyApiMessages({
+        scenarioTitle: title,
+        scenarioBrief: brief,
+        referenceAnswer,
+        learnerMessage: message,
+        history
+      });
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no"
+      });
+      if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+      const controller = new AbortController();
+      const timeoutMs = Number(process.env.LLM_TIMEOUT_MS || 120000);
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const { verdict, reply } = await runVerifyStreamToClient(res, apiMessages, controller.signal);
+        let analysisStatus = readScenarioAnalysisStatus(basecampId, scenarioId);
+        if (verdict === "correct") {
+          await writeScenarioAnalysisCompleted(basecampId, scenarioId);
+          analysisStatus = "completed";
+        }
+        res.write(
+          `data: ${JSON.stringify({
+            type: "done",
+            verdict,
+            analysis_status: analysisStatus,
+            reply_full: reply
+          })}\n\n`
+        );
+        res.end();
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "error",
+              code: "llm_timeout",
+              message: "上游请求超时"
+            })}\n\n`
+          );
+        } else if (error?.code === "llm_not_configured") {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "error",
+              code: "llm_not_configured",
+              message: "未配置 LLM"
+            })}\n\n`
+          );
+        } else if (error?.code === "llm_upstream") {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "error",
+              code: "llm_upstream",
+              message: "模型服务错误",
+              detail: error.detail || ""
+            })}\n\n`
+          );
+        } else {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "error",
+              code: "verify_failed",
+              message: error?.message || "verify failed"
+            })}\n\n`
+          );
+        }
+        res.end();
+      } finally {
+        clearTimeout(timer);
+      }
       return;
     }
 
@@ -1384,6 +1839,7 @@ wss.on("connection", (ws, sessionInfo) => {
 });
 
 loadScenarioFaultStateFromDisk()
+  .then(() => loadScenarioAnalysisStateFromDisk())
   .catch(() => {
     // ignore load error and continue start
   })

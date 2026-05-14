@@ -25,6 +25,7 @@
 
   window.FaultLabStore = createStore({
     basecampsById: {},
-    opsBusyById: {}
+    opsBusyById: {},
+    analysisStatusByScenario: {}
   });
 })();

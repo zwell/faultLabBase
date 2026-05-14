@@ -9,8 +9,12 @@ web/dist/
 web-api/dist/
 webapp/dist/
 
-# Local env/runtime files
+# Local secrets（勿提交；示例见仓库根目录 .env.example）
 .env
+
+# Local scenario UI state (webapp)
+webapp/.scenario-fault-state.json
+webapp/.scenario-analysis-state.json
 .env.local
 *.log
 npm-debug.log*

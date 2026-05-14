@@ -30,6 +30,10 @@ async function postAction(url) {
   return response.json();
 }
 
+function formatMultilineHtml(text) {
+  return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
 function mountApp(html) {
   document.getElementById("app").innerHTML = html;
 }
@@ -320,13 +324,19 @@ function renderScenarioListPage(basecampId, scenarios, filters) {
         const scenarioKey = `${basecampId}::${scenarioId}`;
         const faultState = (store.getState().faultStateByScenario || {})[scenarioKey] || s.fault_state || "not_injected";
         const injectedTag = faultState === "injected" ? '<span class="scenario-tag injected">已注入</span>' : '<span class="scenario-tag">未注入</span>';
+        const analysisState =
+          (store.getState().analysisStatusByScenario || {})[scenarioKey] || s.analysis_status || "not_started";
+        const analysisTags =
+          analysisState === "completed"
+            ? '<span class="scenario-tag learned">已学习</span><span class="scenario-tag completed">已完成</span>'
+            : "";
         const durationText =
           s.duration_min && s.duration_max ? `${s.duration_min}–${s.duration_max} 分钟` : "时长未知";
         return `
           <article class="scenario-card" data-scenario-id="${escapeHtml(scenarioId)}">
             <div class="scenario-title-row">
               <strong class="scenario-title">${escapeHtml(title)}</strong>
-              ${injectedTag}
+              <div class="scenario-card-tags">${analysisTags}${injectedTag}</div>
             </div>
             <div class="scenario-meta">${escapeHtml(`${ctx} · ${diff} · ${durationText}`)}</div>
           </article>
@@ -422,6 +432,7 @@ function renderScenarioDetailPage(basecampId, scenario) {
         <div class="scenario-head-row">
           <h2>${escapeHtml(title)}</h2>
           <div class="scenario-head-actions">
+            <span id="scenario-analysis-tags" class="scenario-analysis-tags"></span>
             <span id="scenario-inject-tag" class="scenario-tag">未注入</span>
             ${
               showInjectUi
@@ -452,7 +463,7 @@ function renderScenarioDetailPage(basecampId, scenario) {
       </section>
       <div id="shell-module-slot"></div>
       <section class="panel llm-panel">
-        <h2>分析对话</h2>
+        <h2>问题分析</h2>
         <div id="llm-messages" class="llm-messages"></div>
         <div class="llm-input-row">
           <textarea id="llm-input" class="llm-input" placeholder="描述你的判断…"></textarea>
@@ -581,32 +592,172 @@ function renderScenarioDetailPage(basecampId, scenario) {
   });
   renderInjectState();
 
+  function renderAnalysisTags() {
+    const el = document.getElementById("scenario-analysis-tags");
+    if (!el) return;
+    const st =
+      (store.getState().analysisStatusByScenario || {})[scenarioStateKey] ||
+      scenario?.analysis_status ||
+      "not_started";
+    if (st === "completed") {
+      el.innerHTML =
+        '<span class="scenario-tag learned">已学习</span><span class="scenario-tag completed">已完成</span>';
+    } else {
+      el.innerHTML = "";
+    }
+  }
+  renderAnalysisTags();
+
   const messagesEl = document.getElementById("llm-messages");
   const inputEl = document.getElementById("llm-input");
   const sendBtn = document.getElementById("llm-send-btn");
   function renderMessages() {
     if (!messages.length) {
-      messagesEl.innerHTML = '<p class="muted">输入你的排查判断，系统会返回引导建议。</p>';
+      const hint = window.FaultLabUiConfig?.llmReady
+        ? "输入你的排查结论，发送后由模型对照参考答案给出引导与是否过关。"
+        : "问题分析未启用：请在运行 webapp 的环境中配置 DEEPSEEK_API_KEY（或 LLM_API_KEY），然后重启服务。";
+      messagesEl.innerHTML = `<p class="muted">${escapeHtml(hint)}</p>`;
       return;
     }
     messagesEl.innerHTML = messages
-      .map((item) => `<div class="llm-msg ${item.role}"><strong>${item.role === "user" ? "你" : "助手"}：</strong>${escapeHtml(item.text)}</div>`)
+      .map(
+        (item) =>
+          `<div class="llm-msg ${item.role}"><strong>${item.role === "user" ? "你" : "助手"}：</strong>${formatMultilineHtml(item.text)}</div>`
+      )
       .join("");
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
   async function sendMessage() {
     const text = String(inputEl.value || "").trim();
     if (!text) return;
+    if (!window.FaultLabUiConfig?.llmReady) {
+      messages.push({
+        role: "assistant",
+        text: "当前未配置语言模型密钥，无法在服务器端调用分析。请参考 webapp/README.md 配置 DEEPSEEK_API_KEY 后重启 webapp。"
+      });
+      inputEl.value = "";
+      renderMessages();
+      return;
+    }
     messages.push({ role: "user", text });
-    messages.push({ role: "assistant", text: "已收到你的判断。下一步建议：优先对比业务状态里的异常指标，再在 shell 中验证对应链路。" });
+    messages.push({ role: "assistant", text: "" });
+    const assistantIdx = messages.length - 1;
     inputEl.value = "";
     renderMessages();
+
+    sendBtn.disabled = true;
+    inputEl.disabled = true;
+    const history = messages.slice(0, -2).map((m) => ({
+      role: m.role,
+      content: m.text
+    }));
+
+    const verifyUrl = `/api/basecamps/${encodeURIComponent(basecampId)}/scenarios/${encodeURIComponent(
+      scenario?.scenario_id || ""
+    )}/verify`;
+
+    function applyVerifySseEvent(evt) {
+      if (!evt || typeof evt !== "object") return;
+      if (evt.type === "token" && evt.text) {
+        messages[assistantIdx].text += evt.text;
+        renderMessages();
+      }
+      if (evt.type === "done") {
+        if (evt.reply_full) messages[assistantIdx].text = String(evt.reply_full);
+        if (evt.analysis_status === "completed") {
+          const snapshot = store.getState();
+          store.setState({
+            analysisStatusByScenario: {
+              ...(snapshot.analysisStatusByScenario || {}),
+              [scenarioStateKey]: "completed"
+            }
+          });
+          cachedScenarioPages.delete(basecampId);
+          const ck = `${basecampId}::${scenario?.scenario_id || ""}`;
+          const prev = cachedScenarioDetails.get(ck);
+          if (prev) cachedScenarioDetails.set(ck, { ...prev, analysis_status: "completed" });
+        }
+        renderAnalysisTags();
+      }
+      if (evt.type === "error") {
+        messages[assistantIdx].text = `请求失败：${evt.message || evt.code || "error"}`;
+      }
+    }
+
+    try {
+      const response = await fetch(verifyUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ message: text, history })
+      });
+      const ct = response.headers.get("content-type") || "";
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        messages[assistantIdx].text = `请求失败：${data.message || data.error || response.status}`;
+        return;
+      }
+      if (!ct.includes("text/event-stream") || !response.body) {
+        messages[assistantIdx].text = "响应格式异常（非 SSE）";
+        return;
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let carry = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        carry += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = carry.indexOf("\n\n")) !== -1) {
+          const block = carry.slice(0, sep);
+          carry = carry.slice(sep + 2);
+          for (const line of block.split("\n")) {
+            const t = line.trim();
+            if (!t.startsWith("data:")) continue;
+            const payload = t.slice(5).trim();
+            let evt;
+            try {
+              evt = JSON.parse(payload);
+            } catch {
+              continue;
+            }
+            applyVerifySseEvent(evt);
+          }
+        }
+      }
+      if (carry.trim()) {
+        for (const line of carry.split("\n")) {
+          const t = line.trim();
+          if (!t.startsWith("data:")) continue;
+          const payload = t.slice(5).trim();
+          let evt;
+          try {
+            evt = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+          applyVerifySseEvent(evt);
+        }
+      }
+    } catch (err) {
+      messages[assistantIdx].text = `请求失败：${String(err.message || err)}`;
+    } finally {
+      sendBtn.disabled = false;
+      inputEl.disabled = false;
+      renderMessages();
+    }
   }
   sendBtn.addEventListener("click", sendMessage);
   inputEl.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") sendMessage();
   });
   renderMessages();
+
+  if (scenarioListUnsubscribe) scenarioListUnsubscribe();
+  scenarioListUnsubscribe = store.subscribe(() => {
+    renderInjectState();
+    renderAnalysisTags();
+  });
 }
 
 function parseRoute() {
@@ -669,6 +820,10 @@ async function loadScenarioDetail(basecampId, scenarioId) {
       faultStateByScenario: {
         ...(snapshot.faultStateByScenario || {}),
         [cacheKey]: scenario.fault_state || "not_injected"
+      },
+      analysisStatusByScenario: {
+        ...(snapshot.analysisStatusByScenario || {}),
+        [cacheKey]: scenario.analysis_status || "not_started"
       }
     });
   }
@@ -728,7 +883,12 @@ async function boot() {
   try {
     window.FaultLabUiConfig = await fetchJson("/api/ui-config");
   } catch {
-    window.FaultLabUiConfig = { showScenarioInjectUi: true, enableScenarioInjection: true };
+    window.FaultLabUiConfig = {
+      showScenarioInjectUi: true,
+      enableScenarioInjection: true,
+      autoInjectOnPage: false,
+      llmReady: false
+    };
   }
 
   async function refreshBasecamps() {

@@ -101,7 +101,7 @@
 - 「故障现象」标题（剧本本身就是现象）
 - 任何根因线索
 
-#### 右栏：终端 + 分析对话
+#### 右栏：终端 + 问题分析
 
 上半部分：终端（连接容器，可直接执行命令）。
 
@@ -156,7 +156,7 @@ GET  /api/basecamps/:id/scenarios      → 场景列表
 POST /api/scenarios/:id/inject         → 注入故障
 POST /api/scenarios/:id/clean          → 重置场景
 GET  /api/scenarios/:id/terminal       → WebSocket，终端连接
-POST /api/scenarios/:id/verify         → 提交分析，返回 SSE 流
+POST /api/basecamps/:id/scenarios/:scenarioId/verify → 提交分析，SSE 流式（`text/event-stream`；`token` / `done` / `error`）
 ```
 
 **终端**：使用 xterm.js，连接后端 WebSocket。

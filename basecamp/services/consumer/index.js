@@ -3,6 +3,8 @@ const { Kafka } = require("kafkajs");
 const KAFKA_BROKER = process.env.KAFKA_BROKER || "basecamp-kafka:9092";
 const TOPIC = "order.created";
 const GROUP_ID = "faultlab-consumer";
+const CONNECT_RETRIES = 30;
+const CONNECT_BACKOFF_MS = 2000;
 const SUBSCRIBE_RETRIES = 20;
 const SUBSCRIBE_BACKOFF_MS = 1500;
 
@@ -39,13 +41,35 @@ async function run() {
   const consumer = kafka.consumer({ groupId: GROUP_ID });
   const admin = kafka.admin();
 
-  try {
-    await admin.connect();
-    await consumer.connect();
-    process.stdout.write(`[consumer] ${nowIso()} Kafka ready\n`);
-  } catch (err) {
-    process.stdout.write(`[consumer] ${nowIso()} Kafka connect failed ERROR: ${err.message}\n`);
-    throw err;
+  let connected = false;
+  let connectErr = null;
+  for (let i = 0; i < CONNECT_RETRIES; i += 1) {
+    try {
+      await admin.connect();
+      await consumer.connect();
+      connected = true;
+      process.stdout.write(`[consumer] ${nowIso()} Kafka ready\n`);
+      break;
+    } catch (err) {
+      connectErr = err;
+      process.stdout.write(
+        `[consumer] ${nowIso()} Kafka connect retry ${i + 1}/${CONNECT_RETRIES} ERROR: ${err.message}\n`
+      );
+      try {
+        await consumer.disconnect();
+      } catch (_e) {
+        /* ignore */
+      }
+      try {
+        await admin.disconnect();
+      } catch (_e) {
+        /* ignore */
+      }
+      await sleep(CONNECT_BACKOFF_MS);
+    }
+  }
+  if (!connected) {
+    throw connectErr || new Error("Kafka connect failed");
   }
 
   await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
