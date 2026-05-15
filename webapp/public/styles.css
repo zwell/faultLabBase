@@ -70,17 +70,111 @@ h2 {
   color: #f0f6fc;
 }
 
-#basecamp-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 14px;
+.panel-basecamp-pick {
+  padding: 22px 20px 20px;
+}
+
+.basecamp-pick-header {
+  margin-bottom: 14px;
+}
+
+.basecamp-pick-title {
+  margin: 0;
+  font-size: 18px;
+  color: #f0f6fc;
+}
+
+.basecamp-pick-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.basecamp-pick-item {
+  margin: 0;
+}
+
+.basecamp-pick-skeleton,
+.basecamp-pick-empty {
+  list-style: none;
+  margin: 0;
+  padding: 16px 12px;
+  text-align: center;
+  border: 1px dashed #30363d;
+  border-radius: 12px;
+  color: #8b949e;
+  font-size: 13px;
 }
 
 .basecamp-card {
   border: 1px solid #30363d;
   border-radius: 14px;
-  padding: 14px 14px 12px;
+  padding: 16px 16px 14px;
   background: #0f141b;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+.basecamp-card:hover {
+  border-color: rgba(88, 166, 255, 0.38);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  transform: translateY(-1px);
+}
+
+.basecamp-card:focus-within {
+  border-color: rgba(88, 166, 255, 0.5);
+  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.25);
+}
+
+.basecamp-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.basecamp-id-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: #8b949e;
+  background: rgba(110, 118, 129, 0.18);
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.status-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.status-pill--running {
+  color: #3fb950;
+  background: rgba(63, 185, 80, 0.12);
+  border-color: rgba(63, 185, 80, 0.38);
+}
+
+.status-pill--stopped {
+  color: #8b949e;
+  background: rgba(110, 118, 129, 0.14);
+  border-color: #30363d;
+}
+
+.status-pill--unknown {
+  color: #e3b341;
+  background: rgba(227, 179, 65, 0.1);
+  border-color: rgba(227, 179, 65, 0.35);
 }
 
 .basecamp-header {
@@ -92,7 +186,10 @@ h2 {
 
 .basecamp-title {
   color: #f0f6fc;
-  font-size: 16px;
+  font-size: 17px;
+  font-weight: 650;
+  display: block;
+  margin: 0 0 6px;
 }
 
 .status-text {
@@ -102,15 +199,28 @@ h2 {
 }
 
 .basecamp-intro {
-  margin: 8px 0 10px;
+  margin: 0 0 10px;
   color: #c9d1d9;
   line-height: 1.45;
 }
 
 .basecamp-meta {
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   font-size: 12px;
   color: #8b949e;
+}
+
+.basecamp-stack-row {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+.basecamp-stack-row .stack-links {
+  gap: 6px;
+}
+
+.basecamp-enter-btn {
+  margin-top: 14px;
 }
 
 .primary-btn {
@@ -123,6 +233,11 @@ h2 {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.basecamp-enter-btn:focus-visible {
+  outline: 2px solid rgba(88, 166, 255, 0.75);
+  outline-offset: 2px;
 }
 
 .primary-btn:disabled {

@@ -1,0 +1,121 @@
+services:
+  pipeline-postgres:
+    container_name: pipeline-postgres
+    restart: unless-stopped
+    image: ${POSTGRES_IMAGE:-postgres:16.3-alpine}
+    environment:
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline
+      POSTGRES_DB: pipeline
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    networks:
+      - pipeline-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline -d pipeline"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  pipeline-redis:
+    container_name: pipeline-redis
+    restart: unless-stopped
+    image: ${REDIS_IMAGE:-redis:7.2-alpine}
+    command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - pipeline-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 8s
+
+  pipeline-api:
+    container_name: pipeline-api
+    restart: unless-stopped
+    image: ${NODE_IMAGE:-node:20-alpine}
+    working_dir: /app
+    volumes:
+      - ./services/api:/app
+    environment:
+      PG_HOST: pipeline-postgres
+      PG_PORT: "5432"
+      PG_USER: faultlab_app
+      PG_PASSWORD: faultlab_app
+      PG_DATABASE: pipeline
+      REDIS_HOST: pipeline-redis
+      REDIS_PORT: "6379"
+      PG_POOL_MAX: "10"
+    command: ["/bin/sh", "-c", "npm install --no-audit --no-fund >/dev/null && node index.js"]
+    networks:
+      - pipeline-net
+    depends_on:
+      pipeline-postgres:
+        condition: service_healthy
+      pipeline-redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"require('http').get('http://127.0.0.1:3000/health',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.exit(r.statusCode===200&&d.includes('ok')?0:1));}).on('error',()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 25s
+
+  pipeline-worker:
+    container_name: pipeline-worker
+    restart: unless-stopped
+    image: ${NODE_IMAGE:-node:20-alpine}
+    working_dir: /app
+    volumes:
+      - ./services/worker:/app
+    environment:
+      PG_HOST: pipeline-postgres
+      PG_PORT: "5432"
+      PG_USER: faultlab_app
+      PG_PASSWORD: faultlab_app
+      PG_DATABASE: pipeline
+      REDIS_HOST: pipeline-redis
+      REDIS_PORT: "6379"
+      PROCESS_DELAY_MS: "50"
+      PG_POOL_MAX: "5"
+    command: ["/bin/sh", "-c", "npm install --no-audit --no-fund >/dev/null && node index.js"]
+    networks:
+      - pipeline-net
+    depends_on:
+      pipeline-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -q '[n]ode'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+
+  pipeline-loader:
+    container_name: pipeline-loader
+    restart: unless-stopped
+    image: ${ALPINE_IMAGE:-alpine:3.19}
+    volumes:
+      - ./services/loader:/loader:ro
+    command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && /bin/sh /loader/run.sh"]
+    networks:
+      - pipeline-net
+    depends_on:
+      pipeline-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -q '[r]un.sh'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+networks:
+  pipeline-net:
+    name: pipeline-net

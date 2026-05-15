@@ -1,0 +1,14 @@
+id: worker-001
+title: 报表任务一直停在排队，运营群里在催进度
+title_reveal: Worker 容器已停止，队列无人消费
+tech: worker
+difficulty: 2
+duration_min: 15
+duration_max: 30
+resource_level: light
+tags:
+  - queue
+  - consumer
+parameter_intervention: false
+requires_shared_compose: true
+business_context: batch

@@ -322,36 +322,87 @@ function parseInfoValue(infoText, key) {
   return Number(raw);
 }
 
-async function collectRuntimeStorageMetrics() {
-  try {
-    const mysqlConnOut = await execCommand(
-      "docker exec basecamp-mysql mysql -u root -proot -N -e \"SHOW STATUS LIKE 'Threads_connected'\"",
-      { cwd: REPO_ROOT, timeout: 5 * 1000 }
-    );
-    const mysqlMaxOut = await execCommand(
-      "docker exec basecamp-mysql mysql -u root -proot -N -e \"SHOW VARIABLES LIKE 'max_connections'\"",
-      { cwd: REPO_ROOT, timeout: 5 * 1000 }
-    );
-    const mysqlActiveOut = await execCommand(
-      "docker exec basecamp-mysql sh -lc \"mysql -u root -proot -N -e \\\"SHOW FULL PROCESSLIST\\\" | wc -l\"",
-      { cwd: REPO_ROOT, timeout: 5 * 1000 }
-    );
-    const redisMemoryOut = await execCommand("docker exec basecamp-redis redis-cli --raw INFO memory", {
-      cwd: REPO_ROOT,
-      timeout: 5 * 1000
-    });
-    const redisStatsOut = await execCommand("docker exec basecamp-redis redis-cli --raw INFO stats", {
-      cwd: REPO_ROOT,
-      timeout: 5 * 1000
-    });
-    const redisDbsizeOut = await execCommand("docker exec basecamp-redis redis-cli --raw DBSIZE", {
-      cwd: REPO_ROOT,
-      timeout: 5 * 1000
-    });
+function normalizeMetricsContainers(project) {
+  const raw = project?.metrics_containers;
+  if (raw && typeof raw === "object") {
+    const api = typeof raw.api === "string" ? raw.api : "";
+    const consumer = typeof raw.consumer === "string" ? raw.consumer : "";
+    const sql = typeof raw.sql === "string" ? raw.sql : typeof raw.mysql === "string" ? raw.mysql : "";
+    const redis = typeof raw.redis === "string" ? raw.redis : "";
+    if (!assertSafeContainerName(api) || !assertSafeContainerName(consumer)) {
+      return null;
+    }
+    if (!assertSafeContainerName(sql) || !assertSafeContainerName(redis)) {
+      return null;
+    }
+    const sqlEngine =
+      raw.sql_engine === "postgres" || String(sql).includes("postgres") ? "postgres" : "mysql";
+    return { api, consumer, sql, redis, sqlEngine };
+  }
+  if (project?.id === "basecamp") {
+    return {
+      api: "basecamp-api",
+      consumer: "basecamp-consumer",
+      sql: "basecamp-mysql",
+      redis: "basecamp-redis",
+      sqlEngine: "mysql"
+    };
+  }
+  return null;
+}
 
-    const mysqlConnections = Number(String(mysqlConnOut.stdout).trim().split(/\s+/).pop());
-    const mysqlConnectionsMax = Number(String(mysqlMaxOut.stdout).trim().split(/\s+/).pop());
-    const mysqlActiveQueries = Number(String(mysqlActiveOut.stdout).trim());
+async function collectRuntimeStorageMetrics(containers) {
+  if (!containers?.redis || !containers?.sql) return null;
+  const { sql, redis, sqlEngine } = containers;
+  if (!assertSafeContainerName(sql) || !assertSafeContainerName(redis)) return null;
+
+  try {
+    let mysqlConnections = NaN;
+    let mysqlConnectionsMax = NaN;
+    let mysqlActiveQueries = NaN;
+
+    if (sqlEngine === "postgres") {
+      const connOut = await execCommand(
+        `docker exec ${sql} psql -U pipeline -d pipeline -t -A -c "SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND usename = 'faultlab_app' AND pid <> pg_backend_pid()"`,
+        { cwd: REPO_ROOT, timeout: 5 * 1000 }
+      );
+      const maxOut = await execCommand(
+        `docker exec ${sql} psql -U pipeline -d pipeline -t -A -c "SHOW max_connections"`,
+        { cwd: REPO_ROOT, timeout: 5 * 1000 }
+      );
+      mysqlConnections = Number(String(connOut.stdout).trim());
+      mysqlConnectionsMax = Number(String(maxOut.stdout).trim());
+      mysqlActiveQueries = mysqlConnections;
+    } else {
+      const mysqlConnOut = await execCommand(
+        `docker exec ${sql} mysql -u root -proot -N -e "SHOW STATUS LIKE 'Threads_connected'"`,
+        { cwd: REPO_ROOT, timeout: 5 * 1000 }
+      );
+      const mysqlMaxOut = await execCommand(
+        `docker exec ${sql} mysql -u root -proot -N -e "SHOW VARIABLES LIKE 'max_connections'"`,
+        { cwd: REPO_ROOT, timeout: 5 * 1000 }
+      );
+      const mysqlActiveOut = await execCommand(
+        `docker exec ${sql} sh -lc "mysql -u root -proot -N -e \\"SHOW FULL PROCESSLIST\\" | wc -l"`,
+        { cwd: REPO_ROOT, timeout: 5 * 1000 }
+      );
+      mysqlConnections = Number(String(mysqlConnOut.stdout).trim().split(/\s+/).pop());
+      mysqlConnectionsMax = Number(String(mysqlMaxOut.stdout).trim().split(/\s+/).pop());
+      mysqlActiveQueries = Number(String(mysqlActiveOut.stdout).trim());
+    }
+
+    const redisMemoryOut = await execCommand(`docker exec ${redis} redis-cli --raw INFO memory`, {
+      cwd: REPO_ROOT,
+      timeout: 5 * 1000
+    });
+    const redisStatsOut = await execCommand(`docker exec ${redis} redis-cli --raw INFO stats`, {
+      cwd: REPO_ROOT,
+      timeout: 5 * 1000
+    });
+    const redisDbsizeOut = await execCommand(`docker exec ${redis} redis-cli --raw DBSIZE`, {
+      cwd: REPO_ROOT,
+      timeout: 5 * 1000
+    });
 
     const usedMemoryBytes = parseInfoValue(redisMemoryOut.stdout, "used_memory");
     const maxMemoryBytes = parseInfoValue(redisMemoryOut.stdout, "maxmemory");
@@ -385,9 +436,10 @@ function computePercentile(values, percentile) {
   return sorted[idx];
 }
 
-async function collectRuntimeOrderMetrics() {
+async function collectRuntimeOrderMetrics(apiContainer, projectId) {
+  if (!assertSafeContainerName(apiContainer)) return null;
   try {
-    const { stdout } = await execCommand("docker logs --since 2m basecamp-api 2>&1", {
+    const { stdout } = await execCommand(`docker logs --since 2m ${apiContainer} 2>&1`, {
       cwd: REPO_ROOT,
       timeout: 5 * 1000,
       maxBuffer: 20 * 1024 * 1024
@@ -400,7 +452,6 @@ async function collectRuntimeOrderMetrics() {
 
     const lastMinuteEntries = [];
     for (const line of lines) {
-      // Example: [api] 2024-... GET /orders 201 123ms
       const match = line.match(/^\[api\]\s+(\S+)\s+(GET|POST)\s+(\S+)\s+(\d+)\s+(\d+)ms/);
       if (!match) continue;
       const ts = Date.parse(match[1]);
@@ -408,14 +459,23 @@ async function collectRuntimeOrderMetrics() {
       if (now - ts > 60 * 1000) continue;
       lastMinuteEntries.push({
         ts,
+        method: match[2],
         path: match[3],
         status: Number(match[4]),
         tookMs: Number(match[5])
       });
     }
 
-    const orderEntries = lastMinuteEntries.filter((item) => item.path === "/orders");
-    const productEntries = lastMinuteEntries.filter((item) => item.path.startsWith("/products"));
+    const writePath = projectId === "pipeline" ? "/jobs" : "/orders";
+    const orderEntries = lastMinuteEntries.filter(
+      (item) => item.path === writePath && item.method === "POST"
+    );
+    const productEntries =
+      projectId === "pipeline"
+        ? lastMinuteEntries.filter(
+            (item) => item.method === "GET" && /^\/jobs\/[0-9]+$/.test(item.path)
+          )
+        : lastMinuteEntries.filter((item) => item.path.startsWith("/products"));
     const total = orderEntries.length;
     if (total === 0 && productEntries.length === 0) {
       return {
@@ -431,8 +491,6 @@ async function collectRuntimeOrderMetrics() {
         read_success_rate: 1
       };
     }
-    // Order 链路的统计只应基于 /orders，而不能混入 /products 的耗时；
-    // 否则注入时 /orders 的慢请求会被正常的 /products 延迟稀释。
     const latencies = orderEntries.map((item) => item.tookMs).filter((n) => Number.isFinite(n));
     const s2 = orderEntries.filter((item) => item.status >= 200 && item.status < 300).length;
     const s4 = orderEntries.filter((item) => item.status >= 400 && item.status < 500).length;
@@ -459,9 +517,10 @@ async function collectRuntimeOrderMetrics() {
   }
 }
 
-async function collectRuntimeConsumerMetrics() {
+async function collectRuntimeConsumerMetrics(consumerContainer, projectId) {
+  if (!assertSafeContainerName(consumerContainer)) return null;
   try {
-    const { stdout } = await execCommand("docker logs --since 2m basecamp-consumer 2>&1", {
+    const { stdout } = await execCommand(`docker logs --since 2m ${consumerContainer} 2>&1`, {
       cwd: REPO_ROOT,
       timeout: 5 * 1000,
       maxBuffer: 10 * 1024 * 1024
@@ -469,10 +528,16 @@ async function collectRuntimeConsumerMetrics() {
     const now = Date.now();
     const rows = [];
     for (const line of String(stdout).split("\n")) {
-      // Example: [consumer] ts consumed order.created offset=42 lag=0 took=103ms
-      const match = line.match(
-        /^\[consumer\]\s+(\S+)\s+consumed\s+\S+\s+offset=(\d+)\s+lag=(-?\d+)\s+took=(\d+)ms/
-      );
+      let match;
+      if (projectId === "pipeline") {
+        match = line.match(
+          /^\[worker\]\s+(\S+)\s+processed\s+job\s+id=(\S+)\s+queue_lag=(-?\d+)\s+took=(\d+)ms/
+        );
+      } else {
+        match = line.match(
+          /^\[consumer\]\s+(\S+)\s+consumed\s+\S+\s+offset=(\d+)\s+lag=(-?\d+)\s+took=(\d+)ms/
+        );
+      }
       if (!match) continue;
       const ts = Date.parse(match[1]);
       if (!Number.isFinite(ts)) continue;
@@ -596,44 +661,78 @@ async function collectMetricsSummary(basecampId, isRunning) {
     : [];
   const injectedScenarios = buildInjectedScenariosForSummary(basecampId, scenariosForInjected);
 
+  const containers = projectForInjected
+    ? normalizeMetricsContainers(projectForInjected)
+    : null;
+  const useMockFallback = !containers;
+
   const phase = getPhaseByTick(state.tick);
-  const point = buildMockMetricsPoint(phase, state.tick);
-  const runtimeOrder = await collectRuntimeOrderMetrics();
-  const runtimeConsumer = await collectRuntimeConsumerMetrics();
-  const order = runtimeOrder || point.order;
-  const consumer = runtimeConsumer || point.consumer;
-  const storage =
-    runtimeOrder && Number.isFinite(runtimeOrder.p99_ms)
-      ? {
-          write_success_rate: runtimeOrder.write_success_rate,
-          read_success_rate: runtimeOrder.read_success_rate,
-          p99_ms: runtimeOrder.p99_ms
-        }
-      : point.storage;
+  const point = useMockFallback ? buildMockMetricsPoint(phase, state.tick) : null;
+
+  const nullOrder = {
+    requests_per_min: null,
+    p99_ms: null,
+    error_rate: null,
+    p95_ms: null,
+    p50_ms: null,
+    status_2xx: null,
+    status_4xx: null,
+    status_5xx: null,
+    write_success_rate: null,
+    read_success_rate: null
+  };
+  const nullConsumer = { lag: null, avg_process_ms: null, offset: null, took_ms: null };
+  const nullStorage = { write_success_rate: null, read_success_rate: null, p99_ms: null };
+
+  const projectId = projectForInjected?.id || basecampId;
+  const runtimeOrder = containers
+    ? await collectRuntimeOrderMetrics(containers.api, projectId)
+    : null;
+  const runtimeConsumer = containers
+    ? await collectRuntimeConsumerMetrics(containers.consumer, projectId)
+    : null;
+
+  const order = runtimeOrder ?? (useMockFallback && point ? point.order : nullOrder);
+  const consumer = runtimeConsumer ?? (useMockFallback && point ? point.consumer : nullConsumer);
+  let storage;
+  if (runtimeOrder && Number.isFinite(runtimeOrder.p99_ms)) {
+    storage = {
+      write_success_rate: runtimeOrder.write_success_rate,
+      read_success_rate: runtimeOrder.read_success_rate,
+      p99_ms: runtimeOrder.p99_ms
+    };
+  } else if (useMockFallback && point) {
+    storage = point.storage;
+  } else {
+    storage = nullStorage;
+  }
 
   pushBounded(state.orderPoints, {
     ts,
-    requests: order.requests_per_min,
-    errors: Math.round(order.requests_per_min * order.error_rate),
-    p99_ms: order.p99_ms,
-    p95_ms: order.p95_ms,
-    p50_ms: order.p50_ms,
-    status_2xx: order.status_2xx,
-    status_4xx: order.status_4xx,
-    status_5xx: order.status_5xx
+    requests: order.requests_per_min ?? 0,
+    errors:
+      order.requests_per_min != null && order.error_rate != null
+        ? Math.round(order.requests_per_min * order.error_rate)
+        : 0,
+    p99_ms: order.p99_ms ?? 0,
+    p95_ms: order.p95_ms ?? 0,
+    p50_ms: order.p50_ms ?? 0,
+    status_2xx: order.status_2xx ?? 0,
+    status_4xx: order.status_4xx ?? 0,
+    status_5xx: order.status_5xx ?? 0
   });
   pushBounded(state.consumerPoints, {
     ts,
-    lag: consumer.lag,
-    avg_process_ms: consumer.avg_process_ms,
-    offset: consumer.offset,
-    took_ms: consumer.took_ms
+    lag: consumer.lag ?? 0,
+    avg_process_ms: consumer.avg_process_ms ?? 0,
+    offset: consumer.offset ?? 0,
+    took_ms: consumer.took_ms ?? 0
   });
   pushBounded(state.storagePoints, {
     ts,
-    write_success_rate: storage.write_success_rate,
-    read_success_rate: storage.read_success_rate,
-    p99_ms: storage.p99_ms
+    write_success_rate: storage.write_success_rate ?? 0,
+    read_success_rate: storage.read_success_rate ?? 0,
+    p99_ms: storage.p99_ms ?? 0
   });
 
   return {
@@ -727,6 +826,12 @@ function extractComposeFileFromStartup(startupCommand) {
   return match ? match[1] : null;
 }
 
+function sanitizeComposeProjectId(projectId) {
+  const raw = String(projectId || "").trim();
+  if (!raw) return "";
+  return raw.replace(/[^a-zA-Z0-9_.-]/g, "");
+}
+
 async function runBasecampAction(project, action) {
   const startup = project?.startup || "";
   const composeFile = extractComposeFileFromStartup(startup);
@@ -736,7 +841,10 @@ async function runBasecampAction(project, action) {
     throw error;
   }
 
-  const composeCmd = (args) => `docker compose -f ${composeFile} ${args}`;
+  const composeProject = sanitizeComposeProjectId(project?.id);
+  const composePrefix =
+    composeProject.length > 0 ? `docker compose -f ${composeFile} -p ${composeProject}` : `docker compose -f ${composeFile}`;
+  const composeCmd = (args) => `${composePrefix} ${args}`;
   const stream = (cmd) =>
     spawnShellStreaming(cmd, {
       cwd: REPO_ROOT,
@@ -745,8 +853,9 @@ async function runBasecampAction(project, action) {
     });
 
   if (action === "start") {
-    broadcastToHostTerminals(project.id, `\r\n$ ${startup}\r\n`);
-    await stream(startup);
+    const startCmd = composeCmd("up -d");
+    broadcastToHostTerminals(project.id, `\r\n$ ${startCmd}\r\n`);
+    await stream(startCmd);
     return;
   }
 
@@ -768,8 +877,9 @@ async function runBasecampAction(project, action) {
     const downCmd = composeCmd("down");
     broadcastToHostTerminals(project.id, `\r\n$ ${downCmd}\r\n`);
     await stream(downCmd);
-    broadcastToHostTerminals(project.id, `\r\n$ ${startup}\r\n`);
-    await stream(startup);
+    const startCmd = composeCmd("up -d");
+    broadcastToHostTerminals(project.id, `\r\n$ ${startCmd}\r\n`);
+    await stream(startCmd);
     return;
   }
 

@@ -1,0 +1,14 @@
+id: postgres-001
+title: 部分任务状态很久不更新，Worker 日志里偶发卡顿
+title_reveal: 会话持有 jobs 表排他锁，阻塞 Worker 更新
+tech: postgres
+difficulty: 3
+duration_min: 20
+duration_max: 40
+resource_level: medium
+tags:
+  - lock
+  - postgres
+parameter_intervention: false
+requires_shared_compose: true
+business_context: batch

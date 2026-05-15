@@ -54,7 +54,7 @@
 - `README.md`
 - `SOLUTION.md`
 - `test.sh`
-- `docker-compose.yml`（仅当场景不是 `requires_basecamp: true` 时需要）
+- `docker-compose.yml`（仅当场景不是 `requires_shared_compose: true` / `requires_basecamp: true` 时需要）
 
 ## 基线运行方式
 

@@ -275,7 +275,8 @@ tags:
 parameter_intervention: true
 
 # 新增字段
-requires_basecamp: true       # 依赖底座
+requires_shared_compose: true   # 依赖共享底座 compose（推荐）；与 requires_basecamp 二选一即可
+# requires_basecamp: true        # 兼容旧字段，语义同 requires_shared_compose
 business_context: payment     # 业务链路：order / payment / search / inventory
 ```
 
@@ -294,7 +295,7 @@ business_context: payment     # 业务链路：order / payment / search / invent
 ### 创建新场景的标准流程
 
 1. 创建目录 `basecamp/scenarios/<tech>/<NNN>-<desc>/`
-2. `meta.yaml`（含 requires_basecamp、business_context）
+2. `meta.yaml`（含 `requires_shared_compose` 或 `requires_basecamp`、`business_context`）
 3. `inject.sh`（含底座检查 + 标准摘要）
 4. `scenario.md`（业务剧本，不含技术根因）
 5. `README.md`（排查路径，不含根因线索）

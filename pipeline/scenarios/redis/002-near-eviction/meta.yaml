@@ -1,0 +1,14 @@
+id: redis-002
+title: 排队忽快忽慢，偶发任务失败或重试变多
+title_reveal: Redis maxmemory 过小且启用淘汰，队列键被逐出
+tech: redis
+difficulty: 3
+duration_min: 15
+duration_max: 30
+resource_level: light
+tags:
+  - eviction
+  - redis
+parameter_intervention: true
+requires_shared_compose: true
+business_context: batch

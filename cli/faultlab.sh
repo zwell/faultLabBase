@@ -111,32 +111,41 @@ json_escape() {
 }
 
 compose_file() {
-  BASECAMP_SHARED_COMPOSE=0
+  SHARED_PROJECT_COMPOSE=0
   COMPOSE_FILE="$SCENARIO_DIR/docker-compose.yml"
   if [ -f "$COMPOSE_FILE" ]; then
     return
   fi
 
   META_FILE="$SCENARIO_DIR/meta.yaml"
-  if [ -f "$META_FILE" ] && grep -Eq '^requires_basecamp:[[:space:]]*true([[:space:]]|$)' "$META_FILE"; then
-    SHARED_COMPOSE="$FAULTLAB_ROOT/$FAULTLAB_PROJECT/docker-compose.yml"
-    if [ -f "$SHARED_COMPOSE" ]; then
-      COMPOSE_FILE="$SHARED_COMPOSE"
-      BASECAMP_SHARED_COMPOSE=1
-      return
+  if [ -f "$META_FILE" ]; then
+    req_shared=0
+    if grep -Eq '^requires_shared_compose:[[:space:]]*true([[:space:]]|$)' "$META_FILE"; then
+      req_shared=1
+    fi
+    if grep -Eq '^requires_basecamp:[[:space:]]*true([[:space:]]|$)' "$META_FILE"; then
+      req_shared=1
+    fi
+    if [ "$req_shared" = "1" ]; then
+      SHARED_COMPOSE="$FAULTLAB_ROOT/$FAULTLAB_PROJECT/docker-compose.yml"
+      if [ -f "$SHARED_COMPOSE" ]; then
+        COMPOSE_FILE="$SHARED_COMPOSE"
+        SHARED_PROJECT_COMPOSE=1
+        return
+      fi
     fi
   fi
 
   echo "ERROR: docker-compose.yml not found in $SCENARIO_DIR"
-  echo "Hint: Basecamp scenarios can set requires_basecamp: true in meta.yaml to use $FAULTLAB_PROJECT/docker-compose.yml"
+  echo "Hint: set requires_shared_compose: true (or legacy requires_basecamp: true) in meta.yaml to use $FAULTLAB_PROJECT/docker-compose.yml"
   exit 1
 }
 
 compose_project_name() {
-  if [ "${BASECAMP_SHARED_COMPOSE:-0}" = "1" ]; then
-    # Must match the default project name for `docker compose -f basecamp/docker-compose.yml`
-    # because services use fixed `container_name: basecamp-*` (only one project can own them).
-    COMPOSE_PROJECT="basecamp"
+  if [ "${SHARED_PROJECT_COMPOSE:-0}" = "1" ]; then
+    # Fixed container_name in compose requires a stable compose project name.
+    # Match Web UI default: directory name equals FAULTLAB_PROJECT (e.g. basecamp, pipeline).
+    COMPOSE_PROJECT="$FAULTLAB_PROJECT"
     return
   fi
   SCENARIO_BASENAME=$(basename "$SCENARIO_DIR")

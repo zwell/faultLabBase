@@ -47,10 +47,41 @@ projects:
       - basecamp-nginx
       - basecamp-loader
     scenario_path: basecamp/scenarios/
-    startup: docker compose -f basecamp/docker-compose.yml up -d
+    startup: docker compose -f basecamp/docker-compose.yml -p basecamp up -d
     status: active
     owner: platform-team
     tags:
       - baseline
       - ecommerce
+      - training
+
+  - id: pipeline
+    name: 异步任务流水线
+    intro: 报表/导出类后台任务：入队、Redis 队列、Worker 消费、Postgres 状态落库。
+    purpose: 演练背压、队列积压、连接与锁等异步链路故障，与商城在线链路形成互补。
+    stack:
+      - docker-compose
+      - nodejs-http
+      - postgres-16
+      - redis-7.2
+      - sh-curl-loader
+    topology:
+      - pipeline-postgres
+      - pipeline-redis
+      - pipeline-api
+      - pipeline-worker
+      - pipeline-loader
+    scenario_path: pipeline/scenarios/
+    startup: docker compose -f pipeline/docker-compose.yml -p pipeline up -d
+    status: active
+    owner: platform-team
+    metrics_containers:
+      api: pipeline-api
+      consumer: pipeline-worker
+      sql: pipeline-postgres
+      redis: pipeline-redis
+      sql_engine: postgres
+    tags:
+      - async
+      - queue
       - training

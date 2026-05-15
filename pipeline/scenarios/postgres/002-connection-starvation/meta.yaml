@@ -1,0 +1,14 @@
+id: postgres-002
+title: 入队接口间歇 5xx，Worker 日志却相对平静
+title_reveal: Postgres 角色连接上限过低，API 连接池拿不到连接
+tech: postgres
+difficulty: 3
+duration_min: 20
+duration_max: 35
+resource_level: medium
+tags:
+  - connection-pool
+  - postgres
+parameter_intervention: true
+requires_shared_compose: true
+business_context: batch

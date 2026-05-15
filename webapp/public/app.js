@@ -100,12 +100,19 @@ function getStackDocUrl(stackKey) {
     "docker-compose": "https://docs.docker.com/compose/",
     "nodejs-http": "https://nodejs.org/api/http.html",
     "mysql-8.0": "https://dev.mysql.com/doc/refman/8.0/en/",
+    "postgres-16": "https://www.postgresql.org/docs/16/index.html",
     "redis-7.2": "https://redis.io/docs/latest/",
     "kafka-3.7": "https://kafka.apache.org/documentation/",
     nginx: "https://nginx.org/en/docs/",
     "sh-curl-loader": "https://pubs.opengroup.org/onlinepubs/9699919799/utilities/sh.html"
   };
   return map[stackKey] || null;
+}
+
+function statusPillClass(status) {
+  if (status === "running") return "status-pill--running";
+  if (status === "stopped") return "status-pill--stopped";
+  return "status-pill--unknown";
 }
 
 function renderStackLinks(stackItems) {
@@ -127,9 +134,13 @@ function renderHome() {
         <p class="hero-subtitle">先选择一个业务底座环境。</p>
       </section>
 
-      <section class="panel">
-        <h2>选择底座</h2>
-        <div id="basecamp-list">加载中...</div>
+      <section class="panel panel-basecamp-pick">
+        <header class="basecamp-pick-header">
+          <h2 class="basecamp-pick-title">选择底座</h2>
+        </header>
+        <ul id="basecamp-list" class="basecamp-pick-list" role="list" aria-busy="true">
+          <li class="basecamp-pick-skeleton" role="status">加载中…</li>
+        </ul>
       </section>
     </div>
   `);
@@ -141,10 +152,13 @@ function renderBasecamps() {
   const listEl = document.getElementById("basecamp-list");
   if (!listEl) return;
   if (!cachedBasecamps.length) {
-    listEl.innerHTML = '<p class="muted">暂无底座，请先在 project.yaml 中配置 projects</p>';
+    listEl.innerHTML =
+      '<li class="basecamp-pick-empty muted" role="status">暂无可用的演练环境。</li>';
+    listEl.removeAttribute("aria-busy");
     return;
   }
 
+  listEl.removeAttribute("aria-busy");
   listEl.innerHTML = cachedBasecamps
     .map((basecamp) => {
       const statusText = getStatusText(basecamp.status);
@@ -152,24 +166,32 @@ function renderBasecamps() {
       const countText = `${Number(basecamp.scenario_count || 0)} 个场景 · ${resourceLevelText}`;
       const starting = startInProgress.has(basecamp.id);
       const buttonText =
-        basecamp.status === "running" ? "开始演练" : starting ? "启动中…" : "开始演练";
+        basecamp.status === "running" ? "进入演练" : starting ? "启动中…" : "启动并进入";
+      const pillClass = statusPillClass(basecamp.status);
+      const stackHtml = renderStackLinks(basecamp.stack || []);
       return `
-        <article class="basecamp-card" data-basecamp-id="${escapeHtml(basecamp.id)}">
-          <div class="basecamp-header">
+        <li class="basecamp-pick-item" role="listitem">
+          <article class="basecamp-card" data-basecamp-id="${escapeHtml(basecamp.id)}">
+            <div class="basecamp-card-topline">
+              <span class="basecamp-id-chip">${escapeHtml(basecamp.id)}</span>
+              <span class="status-pill ${pillClass}">${escapeHtml(statusText)}</span>
+            </div>
             <strong class="basecamp-title">${escapeHtml(basecamp.name || "")}</strong>
-            <span class="status-text">${escapeHtml(statusText)}</span>
-          </div>
-          <p class="basecamp-intro">${escapeHtml(basecamp.intro || "暂无描述")}</p>
-          <p class="basecamp-meta">${escapeHtml(countText)}</p>
-          <button class="primary-btn" ${starting ? "disabled" : ""}>${escapeHtml(buttonText)}</button>
-        </article>
+            <p class="basecamp-meta">${escapeHtml(countText)}</p>
+            <p class="basecamp-intro">${escapeHtml(basecamp.intro || "暂无描述")}</p>
+            <div class="basecamp-stack-row" aria-label="技术栈">${stackHtml}</div>
+            <button type="button" class="primary-btn basecamp-enter-btn" ${starting ? "disabled" : ""}>${escapeHtml(
+        buttonText
+      )}</button>
+          </article>
+        </li>
       `;
     })
     .join("");
 
   for (const card of listEl.querySelectorAll(".basecamp-card")) {
     const basecampId = card.dataset.basecampId;
-    const btn = card.querySelector("button.primary-btn");
+    const btn = card.querySelector("button.basecamp-enter-btn");
     if (!btn) continue;
 
     btn.addEventListener("click", async () => {

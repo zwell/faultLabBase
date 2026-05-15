@@ -1,0 +1,14 @@
+id: redis-001
+title: 后台显示排队越来越多，但机器 CPU 并不高
+title_reveal: Worker 被注入极长单任务延迟，消费速率远低于入队
+tech: redis
+difficulty: 2
+duration_min: 15
+duration_max: 30
+resource_level: light
+tags:
+  - backlog
+  - queue
+parameter_intervention: true
+requires_shared_compose: true
+business_context: batch

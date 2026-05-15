@@ -118,6 +118,15 @@ tags:                                  # 关键词，用于前端筛选
 parameter_intervention: false          # 是否人为修改了关键中间件参数
 ```
 
+#### 共享底座 compose（`requires_shared_compose` / 兼容 `requires_basecamp`）
+
+当场景目录**没有**自带 `docker-compose.yml`、故障注入在**已运行的项目底座**上完成时，在 `meta.yaml` 中设置其一即可：
+
+- **`requires_shared_compose: true`**（推荐）：使用仓库内 `<project>/docker-compose.yml`，其中 `<project>` 与 `FAULTLAB_PROJECT`、`project.yaml` 里的项目 `id` 一致（如 `basecamp`、`pipeline`）。
+- **`requires_basecamp: true`**（兼容旧场景）：语义与上相同，仅保留历史字段名。
+
+`cli/faultlab.sh` 的 `start` / `clean` 会对共享 compose 使用 **`-p <project_id>`**，与 Web 面板对同一 compose 的工程名约定一致。底座 compose 内应使用**固定** `container_name`（如 `basecamp-mysql`、`pipeline-api`），网络名亦建议显式 `name:`，避免依赖默认工程名。
+
 #### 标题：`title` 与 `title_reveal`（揭题标题）
 
 为避免「列表/详情一眼看穿根因」，标题拆成两层语义（字段名 **`title_reveal`** 固定，勿改名）：
@@ -229,6 +238,7 @@ scenario       : <scenario-id>
   - `FAULTLAB_PROJECT=<project>`（默认 `basecamp`）
   - `FAULTLAB_SCENARIO=<project>/scenarios/<tech>/<id>`（相对 `faultlab` 根）
 - 编写脚本时，不要写死项目目录名（如 `basecamp`）；路径应基于当前场景目录或由变量推导。
+- 共享底座场景在 `meta.yaml` 使用 `requires_shared_compose: true`（或兼容字段 `requires_basecamp: true`），`start/clean` 使用仓库根下 `$FAULTLAB_PROJECT/docker-compose.yml`，compose 工程名为 `$FAULTLAB_PROJECT`。
 - `verify` 命令由外层统一实现：读取当前场景的 `SOLUTION.md`，结合用户配置的 API Key 启动 LLM 交互；场景侧无需、也不应提供 `verify.sh`。
 - API Key 通过根目录 `.env` 文件配置（格式见 `.env.example`），`faultlab.sh` 负责读取并传递给 verify 模块，场景侧无需关心。
 

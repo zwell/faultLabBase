@@ -1,0 +1,14 @@
+id: api-001
+title: 前端点「生成报表」经常直接失败，状态码偏 5xx
+title_reveal: API 入队路径被注入为固定 503
+tech: api
+difficulty: 2
+duration_min: 10
+duration_max: 25
+resource_level: light
+tags:
+  - http
+  - availability
+parameter_intervention: true
+requires_shared_compose: true
+business_context: batch
